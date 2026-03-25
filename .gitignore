@@ -1,0 +1,8 @@
+node_modules/
+.env
+*.h5
+*.pkl
+__pycache__/
+.DS_Store
+dist/
+build/
