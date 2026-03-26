@@ -5,6 +5,7 @@ export default function Navbar() {
     <nav className="bg-white p-4 shadow-md sticky top-0 z-50">
       <div className="container mx-auto flex justify-between items-center">
 
+<<<<<<< HEAD
         {/* 로고 영역: 텍스트 먼저, 로고 나중 + 로고 크기/위치 조정 */}
         <div className="flex items-center space-x-2">
           <Link to="/" className="text-xl font-black text-black tracking-tight">
@@ -19,6 +20,18 @@ export default function Navbar() {
 
         {/* 네비게이션 메뉴 및 시작하기 버튼 */}
         <div className="flex items-center space-x-20">
+=======
+        {/* 로고 영역 */}
+        <div className="flex items-center space-x-2">
+          <img src="/logo.png" alt="로고" className="h-8 w-auto" />
+          <Link to="/" className="text-xl font-black text-black tracking-tight">
+            UpTick
+          </Link>
+        </div>
+
+        <div className="flex items-center space-x-20">
+
+>>>>>>> 344acb2c6ba53f50cd543eae6d046ae1010cb349
           <div className="flex space-x-16 text-black font-medium">
             <Link to="/stock" className="hover:text-[#4CAF4F] transition">종목</Link>
             <Link to="/manage" className="hover:text-[#4CAF4F] transition">주식 관리</Link>
@@ -32,8 +45,13 @@ export default function Navbar() {
           <Link to="/auth" className="bg-[#4CAF4F] text-white px-8 py-3 rounded-md font-bold hover:opacity-80 transition text-sm inline-block text-center">
             시작하기 →
           </Link>
+<<<<<<< HEAD
         </div>
 
+=======
+
+        </div>
+>>>>>>> 344acb2c6ba53f50cd543eae6d046ae1010cb349
       </div>
     </nav>
   );
