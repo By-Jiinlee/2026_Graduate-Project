@@ -181,4 +181,9 @@
     right: 0;
     border-right-color: var(--border);
   }
+
+  html {
+  overflow-y: scroll; /* 콘텐츠 양과 상관없이 수직 스크롤바 공간을 항상 유지 */
+}
+
 }

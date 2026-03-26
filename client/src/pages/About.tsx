@@ -8,7 +8,14 @@ export default function About() {
   ]
 
   return (
-    <div style={{ fontFamily: 'sans-serif', padding: '60px 120px' }}>
+    <div style={{
+      fontFamily: 'sans-serif',
+      padding: '60px 120px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center', // 전체 컨테이너 요소를 가운데로 정렬
+      textAlign: 'center',  // 텍스트를 가운데 정렬
+    }}>
 
       {/* 소개 텍스트 */}
       <section style={{ marginBottom: '60px' }}>
@@ -16,9 +23,9 @@ export default function About() {
           UpTick을 소개합니다.
         </h1>
         <p style={{ fontSize: '15px', color: '#444', lineHeight: '1.8', maxWidth: '700px' }}>
-          정확한 마켓트렌드와 투자자의 입장 단계별 환경에는 주식 흐름입니다.
-          리스크 없이 시장을 경험하고, 자세한 전략을 수립할 수 있습니다.
-          초보자와 전문투자자 고수와 같은 실용 해결하기, 업티 나쁜은 UpTick입니다.
+          리스크 없이 시장을 경험하고, 자세한 전략을 수립할 수 있습니다. <br />
+          초보자와 전문투자자 고수와 같은 실용 해결하기, <br /> 
+          UpTick에서 경험해보세요.
         </p>
       </section>
 

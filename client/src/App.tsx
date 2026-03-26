@@ -8,6 +8,7 @@ import Community from './pages/Community'
 import Support from './pages/Support'
 import Events from './pages/Events'
 import MyPage from './pages/MyPage'
+import Auth from './pages/Auth' // Auth 페이지 추가
 
 function App() {
   return (
@@ -15,13 +16,15 @@ function App() {
       <Navbar />
       <Routes>
         <Route path="/" element={<LandingPage />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/stocks" element={<StockList />} />
+        {/* 네브바의 링크(/stock)와 맞추기 위해 /stocks 대신 /stock 사용 추천 */}
+        <Route path="/stock" element={<StockList />} /> 
+        <Route path="/manage" element={<Dashboard />} /> {/* /dashboard 대신 /manage로 통일 */}
         <Route path="/about" element={<About />} />
         <Route path="/community" element={<Community />} />
         <Route path="/support" element={<Support />} />
         <Route path="/events" element={<Events />} />
         <Route path="/mypage" element={<MyPage />} />
+        <Route path="/auth" element={<Auth />} /> {/* 시작하기 버튼을 위한 경로 추가 */}
       </Routes>
     </BrowserRouter>
   )
