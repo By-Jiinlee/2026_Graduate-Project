@@ -1,4 +1,7 @@
-export default function LandingPage() {
+import React from 'react'
+import { Link } from 'react-router-dom'
+
+export default function LandingPage(): React.ReactElement {
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
       {/* 히어로 섹션 */}
@@ -22,7 +25,7 @@ export default function LandingPage() {
           >
             투자의 기준을 높이다,
             <br />
-            <span style={{ color: '#3CB371' }}>UpTick</span>
+            <span style={{ color: '#4CAF4F' }}>UpTick</span>
           </h1>
           <p
             style={{
@@ -35,36 +38,46 @@ export default function LandingPage() {
             실시간 시장 데이터와 AI 분석으로
             <br />더 스마트한 투자를 시작하세요.
           </p>
-          <button
-            style={{
-              backgroundColor: '#22C55E',
-              color: 'white',
-              padding: '14px 32px',
-              borderRadius: '8px',
-              border: 'none',
-              fontSize: '16px',
-              fontWeight: '600',
-              cursor: 'pointer',
-            }}
-          >
-            시작하기
-          </button>
+
+          {/* 시작하기 버튼: 오타 수정됨 */}
+          <Link to="/auth" style={{ textDecoration: 'none' }}>
+            <button
+              style={{
+                backgroundColor: '#4CAF4F',
+                color: 'white',
+                padding: '14px 32px',
+                borderRadius: '8px',
+                border: 'none',
+                fontSize: '16px',
+                fontWeight: '600',
+                cursor: 'pointer',
+                display: 'inline-block',
+              }}
+            >
+              시작하기
+            </button>
+          </Link>
         </div>
 
-        {/* 오른쪽 장식 */}
+        {/* 오른쪽 이미지 장식 */}
         <div
           style={{
-            width: '420px',
-            height: '280px',
-            backgroundColor: '#e8f5e9',
-            borderRadius: '16px',
+            width: '500px',
             display: 'flex',
-            alignItems: 'center',
             justifyContent: 'center',
-            fontSize: '80px',
+            alignItems: 'center',
           }}
         >
-          📈
+          <img
+            src="/main.png"
+            alt="UpTick 메인 이미지"
+            style={{
+              width: '100%',
+              height: 'auto',
+              borderRadius: '16px',
+              objectFit: 'contain',
+            }}
+          />
         </div>
       </section>
 
@@ -113,7 +126,6 @@ export default function LandingPage() {
           시장 정보
         </h2>
         <div style={{ display: 'flex', gap: '24px' }}>
-          {/* 차트 자리 */}
           <div
             style={{
               flex: 1,
@@ -124,12 +136,10 @@ export default function LandingPage() {
               alignItems: 'center',
               justifyContent: 'center',
               color: '#aaa',
-              fontSize: '14px',
             }}
           >
             KOSPI 차트 (추후 연동)
           </div>
-
           <div
             style={{
               flex: 1,
@@ -140,7 +150,6 @@ export default function LandingPage() {
               alignItems: 'center',
               justifyContent: 'center',
               color: '#aaa',
-              fontSize: '14px',
             }}
           >
             KOSDAQ 차트 (추후 연동)
