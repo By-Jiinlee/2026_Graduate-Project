@@ -1,0 +1,35 @@
+<<<<<<< HEAD
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+=======
+node_modules/
+.env
+*.h5
+*.pkl
+__pycache__/
+.DS_Store
+dist/
+build/
+>>>>>>> dfbf3936371ad40f0d57f4a903e44c5a40d11d86
