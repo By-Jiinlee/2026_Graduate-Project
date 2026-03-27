@@ -38,11 +38,12 @@ Wallet.init(
     user_id: {
       type: DataTypes.BIGINT,
       allowNull: false,
+      unique: true,          // 1유저 1지갑 강제
     },
     address: {
       type: DataTypes.STRING(42),
       allowNull: false,
-      unique: true,
+      unique: true,          // 지갑 주소 중복 방지
     },
     network: {
       type: DataTypes.STRING(50),

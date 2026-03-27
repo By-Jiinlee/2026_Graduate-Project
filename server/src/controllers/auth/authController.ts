@@ -1,16 +1,70 @@
 import { Request, Response } from 'express'
+import jwt from 'jsonwebtoken'
 import * as authService from '../../services/auth/authService'
 
-// 회원가입
+// ─── 이메일 인증 ──────────────────────────────────────────────
+
+// 이메일 인증코드 발송
+export const sendEmailCode = async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body
+    await authService.sendEmailCode(email)
+    return res.status(200).json({ message: '인증코드가 발송되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+// 이메일 인증코드 검증
+export const verifyEmailCode = async (req: Request, res: Response) => {
+  try {
+    const { email, code } = req.body
+    await authService.verifyEmailCode(email, code)
+    return res.status(200).json({ message: '이메일 인증이 완료되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+// ─── SMS 인증 ─────────────────────────────────────────────────
+
+// SMS 인증코드 발송
+export const sendSmsCode = async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body
+    await authService.sendSmsCode(phone)
+    return res.status(200).json({ message: '인증코드가 발송되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+// SMS 인증코드 검증
+export const verifySmsCode = async (req: Request, res: Response) => {
+  try {
+    const { phone, code } = req.body
+    await authService.verifySmsCode(phone, code)
+    return res.status(200).json({ message: '휴대폰 인증이 완료되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+// ─── 회원가입 ─────────────────────────────────────────────────
+
 export const register = async (req: Request, res: Response) => {
   try {
-    const { email, password, name, phone, walletAddress } = req.body
+    const {
+      email, password, name, phone, walletAddress, walletSignature,
+      terms_agreed, privacy_agreed, location_agreed, age_agreed,
+      marketing_agreed,
+    } = req.body
 
-    // 지갑 주소 필수 확인
     if (!walletAddress) {
-      return res
-        .status(400)
-        .json({ message: 'MetaMask 지갑 연결이 필요합니다' })
+      return res.status(400).json({ message: 'MetaMask 지갑 연결이 필요합니다' })
+    }
+    if (!walletSignature) {
+      return res.status(400).json({ message: '지갑 서명이 필요합니다' })
     }
 
     const user = await authService.register(
@@ -19,6 +73,12 @@ export const register = async (req: Request, res: Response) => {
       name,
       phone,
       walletAddress,
+      walletSignature,
+      terms_agreed,
+      privacy_agreed,
+      location_agreed,
+      age_agreed,
+      marketing_agreed ?? false,
     )
 
     return res.status(201).json({
@@ -30,15 +90,49 @@ export const register = async (req: Request, res: Response) => {
   }
 }
 
-// 로그인
-export const login = async (req: Request, res: Response) => {
+// ─── 로그인 ───────────────────────────────────────────────────
+
+// 1단계: 이메일 + 비밀번호 검증 → nonce 반환
+export const loginStep1 = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body
 
-    const { user, accessToken, refreshToken, walletAddress } =
-      await authService.login(email, password)
+    const { userId, walletAddress, nonce } = await authService.loginStep1(
+      email,
+      password,
+    )
 
-    // 쿠키에 토큰 저장
+    return res.status(200).json({
+      message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
+      userId,
+      walletAddress,
+      nonce,
+    })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+// 2단계: 지갑 서명 검증 → JWT 발급
+export const loginStep2 = async (req: Request, res: Response) => {
+  try {
+    const { userId, walletAddress, signature } = req.body
+
+    const ip =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      'unknown'
+
+    const userAgent = req.headers['user-agent'] || 'unknown'
+
+    const { user, accessToken, refreshToken } = await authService.loginStep2(
+      userId,
+      walletAddress,
+      signature,
+      ip,
+      userAgent,
+    )
+
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -68,35 +162,34 @@ export const login = async (req: Request, res: Response) => {
   }
 }
 
-// 로그아웃
+// ─── 로그아웃 ─────────────────────────────────────────────────
+
 export const logout = async (req: Request, res: Response) => {
   try {
     res.clearCookie('accessToken')
     res.clearCookie('refreshToken')
-
     return res.status(200).json({ message: '로그아웃 되었습니다' })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })
   }
 }
 
-// 탈퇴
+// ─── 탈퇴 ─────────────────────────────────────────────────────
+
 export const withdraw = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-
     await authService.withdraw(userId)
-
     res.clearCookie('accessToken')
     res.clearCookie('refreshToken')
-
     return res.status(200).json({ message: '탈퇴가 완료되었습니다' })
   } catch (error: any) {
     return res.status(400).json({ message: error.message })
   }
 }
 
-// 토큰 갱신
+// ─── 토큰 갱신 ───────────────────────────────────────────────
+
 export const refreshToken = async (req: Request, res: Response) => {
   try {
     const token = req.cookies.refreshToken
@@ -104,7 +197,7 @@ export const refreshToken = async (req: Request, res: Response) => {
 
     const decoded = authService.verifyRefreshToken(token) as any
 
-    const accessToken = require('jsonwebtoken').sign(
+    const accessToken = jwt.sign(
       { id: decoded.id },
       process.env.JWT_SECRET as string,
       { expiresIn: '1h' },

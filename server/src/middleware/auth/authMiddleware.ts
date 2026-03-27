@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import jwt from 'jsonwebtoken'
 import * as authService from '../../services/auth/authService'
 import User from '../../models/user/User'
 
@@ -14,24 +15,17 @@ export const isAuthenticated = async (
 
     const decoded = authService.verifyAccessToken(token) as any
 
-    // 유저 조회
     const user = await User.findByPk(decoded.id)
-    if (!user)
-      return res.status(401).json({ message: '유저를 찾을 수 없습니다' })
+    if (!user) return res.status(401).json({ message: '유저를 찾을 수 없습니다' })
+    if (user.status === 'withdrawn') return res.status(401).json({ message: '탈퇴한 계정입니다' })
+    if (user.is_locked) return res.status(403).json({ message: '계정이 잠겼습니다' })
 
-    // 탈퇴 확인
-    if (user.status === 'withdrawn')
-      return res.status(401).json({ message: '탈퇴한 계정입니다' })
-
-    // 계정 잠금 확인
-    if (user.is_locked)
-      return res.status(403).json({ message: '계정이 잠겼습니다' })
-
-      // req에 유저 정보 저장
     ;(req as any).user = user
-
     next()
   } catch (error) {
+    if (error instanceof jwt.TokenExpiredError) {
+      return res.status(401).json({ message: '토큰이 만료되었습니다' })
+    }
     return res.status(401).json({ message: '유효하지 않은 토큰입니다' })
   }
 }
@@ -45,9 +39,7 @@ export const isAdmin = async (
   try {
     const user = (req as any).user
     if (!user) return res.status(401).json({ message: '로그인이 필요합니다' })
-    if (user.role !== 'admin')
-      return res.status(403).json({ message: '관리자 권한이 필요합니다' })
-
+    if (user.role !== 'admin') return res.status(403).json({ message: '관리자 권한이 필요합니다' })
     next()
   } catch (error) {
     return res.status(403).json({ message: '접근 권한이 없습니다' })
@@ -67,7 +59,6 @@ export const isSameUser = async (
     if (user.id !== targetId && user.role !== 'admin') {
       return res.status(403).json({ message: '접근 권한이 없습니다' })
     }
-
     next()
   } catch (error) {
     return res.status(403).json({ message: '접근 권한이 없습니다' })

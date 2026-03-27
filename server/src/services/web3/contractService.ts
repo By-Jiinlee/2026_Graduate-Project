@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, getAddress } from 'viem'
+import { createPublicClient, createWalletClient, http, getAddress, encodeAbiParameters, keccak256, concat, toBytes, toHex } from 'viem'
 import { sepolia } from 'viem/chains'
 import { privateKeyToAccount } from 'viem/accounts'
 import fs from 'fs'
@@ -13,11 +13,24 @@ const abi = JSON.parse(fs.readFileSync(abiPath, 'utf-8'))
 
 const contractAddress = getAddress(process.env.CONTRACT_AUTH_ADDRESS as string)
 
+const account = privateKeyToAccount(
+  process.env.SERVER_PRIVATE_KEY as `0x${string}`,
+)
+
 // Public Client (읽기 전용)
 const publicClient = createPublicClient({
   chain: sepolia,
   transport: http(process.env.SEPOLIA_RPC_URL),
 })
+
+// Wallet Client (쓰기 전용)
+const walletClient = createWalletClient({
+  account,
+  chain: sepolia,
+  transport: http(process.env.SEPOLIA_RPC_URL),
+})
+
+// ─── 읽기 함수 ────────────────────────────────────────────────
 
 // 지갑 등록 여부 확인
 export const isWalletRegistered = async (
@@ -32,7 +45,7 @@ export const isWalletRegistered = async (
   return result as boolean
 }
 
-// nonce 조회
+// 로그인 nonce 조회
 export const getAuthNonce = async (walletAddress: string): Promise<bigint> => {
   const result = await publicClient.readContract({
     address: contractAddress,
@@ -43,22 +56,90 @@ export const getAuthNonce = async (walletAddress: string): Promise<bigint> => {
   return result as bigint
 }
 
-// 서명 검증
+// 거래 nonce 조회
+export const getTradeNonce = async (walletAddress: string): Promise<bigint> => {
+  const result = await publicClient.readContract({
+    address: contractAddress,
+    abi,
+    functionName: 'getTradeNonce',
+    args: [getAddress(walletAddress)],
+  })
+  return result as bigint
+}
+
+// ─── 서명 메시지 생성 헬퍼 (클라이언트 서명용) ────────────────
+
+// 로그인 서명 메시지 생성
+// 클라이언트에서 personal_sign 할 때 이 메시지를 사용
+export const buildAuthMessage = (
+  walletAddress: string,
+  nonce: bigint,
+): `0x${string}` => {
+  return keccak256(
+    concat([
+      toBytes(BigInt(sepolia.id)),           // chainid
+      toBytes(contractAddress),              // address(this)
+      toBytes(getAddress(walletAddress)),    // wallet
+      toBytes(nonce),                        // nonce
+    ]),
+  )
+}
+
+// 거래 서명 메시지 생성
+export const buildTradeMessage = (
+  walletAddress: string,
+  nonce: bigint,
+  amount: bigint,
+  stockCode: string,
+): `0x${string}` => {
+  return keccak256(
+    concat([
+      toBytes(BigInt(sepolia.id)),
+      toBytes(contractAddress),
+      toBytes(getAddress(walletAddress)),
+      toBytes(nonce),
+      toBytes(amount),
+      new TextEncoder().encode(stockCode),
+    ]),
+  )
+}
+
+// ─── 쓰기 함수 ────────────────────────────────────────────────
+
+// 서버 대리 지갑 등록 (회원가입 시)
+export const registerWalletFor = async (
+  walletAddress: string,
+): Promise<void> => {
+  const { request } = await publicClient.simulateContract({
+    address: contractAddress,
+    abi,
+    functionName: 'registerWalletFor',
+    args: [getAddress(walletAddress)],
+    account,
+  })
+  await walletClient.writeContract(request)
+}
+
+// 서버 대리 지갑 등록 취소 (탈퇴 시)
+export const unregisterWallet = async (
+  walletAddress: string,
+): Promise<void> => {
+  const { request } = await publicClient.simulateContract({
+    address: contractAddress,
+    abi,
+    functionName: 'unregisterWallet',
+    args: [getAddress(walletAddress)],
+    account,
+  })
+  await walletClient.writeContract(request)
+}
+
+// 로그인 2차 인증 서명 검증
 export const verifySignature = async (
   walletAddress: string,
   nonce: bigint,
   signature: string,
 ): Promise<boolean> => {
-  const account = privateKeyToAccount(
-    process.env.SERVER_PRIVATE_KEY as `0x${string}`,
-  )
-
-  const walletClient = createWalletClient({
-    account,
-    chain: sepolia,
-    transport: http(process.env.SEPOLIA_RPC_URL),
-  })
-
   const { request } = await publicClient.simulateContract({
     address: contractAddress,
     abi,
@@ -66,7 +147,31 @@ export const verifySignature = async (
     args: [getAddress(walletAddress), nonce, signature as `0x${string}`],
     account,
   })
+  await walletClient.writeContract(request)
+  return true
+}
 
+// 거래 서명 검증
+export const verifyTradeSignature = async (
+  walletAddress: string,
+  nonce: bigint,
+  amount: bigint,
+  stockCode: string,
+  signature: string,
+): Promise<boolean> => {
+  const { request } = await publicClient.simulateContract({
+    address: contractAddress,
+    abi,
+    functionName: 'verifyTradeSignature',
+    args: [
+      getAddress(walletAddress),
+      nonce,
+      amount,
+      stockCode,
+      signature as `0x${string}`,
+    ],
+    account,
+  })
   await walletClient.writeContract(request)
   return true
 }
