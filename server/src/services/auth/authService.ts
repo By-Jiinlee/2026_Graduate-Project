@@ -50,15 +50,21 @@ export const sendEmailCode = async (email: string): Promise<void> => {
     order: [['created_at', 'DESC']],
   })
   if (lastSent) {
-  const diff = Date.now() - new Date(lastSent.created_at!).getTime()
-  if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
-}
+    const diff = Date.now() - new Date(lastSent.created_at!).getTime()
+    if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
+  }
 
   // 6자리 코드 생성
   const code = crypto.randomInt(100000, 999999).toString()
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // 5분
 
-  await EmailVerification.create({ email, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  await EmailVerification.create({
+    email,
+    code,
+    expires_at: expiresAt,
+    is_used: false,
+    fail_count: 0,
+  })
   await sendVerificationEmail(email, code)
 }
 
@@ -73,7 +79,8 @@ export const verifyEmailCode = async (
   })
 
   if (!record) throw new Error('인증코드가 존재하지 않습니다')
-  if (new Date() > record.expires_at) throw new Error('인증코드가 만료되었습니다')
+  if (new Date() > record.expires_at)
+    throw new Error('인증코드가 만료되었습니다')
 
   // 실패 횟수 확인 (5회 초과 시 무효화)
   if (record.fail_count >= 5) {
@@ -93,7 +100,7 @@ export const verifyEmailCode = async (
 // ─── SMS 인증 ────────────────────────────────────────────────
 
 // SMS 인증코드 발송
-export const sendSmsCode = async (phone: string): Promise<void> => {
+/*export const sendSmsCode = async (phone: string): Promise<void> => {
   // 휴대폰 중복 확인
   const existing = await User.findOne({ where: { phone } })
   if (existing) throw new Error('이미 사용 중인 휴대폰 번호입니다')
@@ -159,7 +166,7 @@ export const verifySmsCode = async (
   }
 
   await record.update({ is_used: true })
-}
+}*/
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 
@@ -182,13 +189,15 @@ export const register = async (
   })
   if (!emailVerified) throw new Error('이메일 인증이 완료되지 않았습니다')
 
-  const smsVerified = await SmsVerification.findOne({
+  /*const smsVerified = await SmsVerification.findOne({
     where: { phone, is_used: true },
     order: [['created_at', 'DESC']],
   })
   if (!smsVerified) throw new Error('휴대폰 인증이 완료되지 않았습니다')
-
-  const existingWallet = await Wallet.findOne({ where: { address: walletAddress } })
+*/
+  const existingWallet = await Wallet.findOne({
+    where: { address: walletAddress },
+  })
   if (existingWallet) throw new Error('이미 등록된 지갑 주소입니다')
 
   const onChainRegistered = await isWalletRegistered(walletAddress)
@@ -242,7 +251,8 @@ export const register = async (
 export const loginStep1 = async (email: string, password: string) => {
   const user = await User.findOne({ where: { email } })
   if (!user) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
-  if (user.is_locked) throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
+  if (user.is_locked)
+    throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
   if (user.status === 'withdrawn') throw new Error('탈퇴한 계정입니다')
 
   const isMatch = await bcrypt.compare(password, user.password_hash)
@@ -256,7 +266,11 @@ export const loginStep1 = async (email: string, password: string) => {
   // 온체인 nonce 조회
   const nonce = await getAuthNonce(wallet.address)
 
-  return { userId: user.id, walletAddress: wallet.address, nonce: nonce.toString() }
+  return {
+    userId: user.id,
+    walletAddress: wallet.address,
+    nonce: nonce.toString(),
+  }
 }
 
 // 2단계: 지갑 서명 검증 → JWT 발급
@@ -309,19 +323,21 @@ const saveLoginRecord = async (
   userAgent: string,
 ) => {
   try {
-    const geoRes = await fetch(`http://ip-api.com/json/${ip}?fields=country,regionName,city`)
-    const geo = await geoRes.json() as GeoResponse
+    const geoRes = await fetch(
+      `http://ip-api.com/json/${ip}?fields=country,regionName,city`,
+    )
+    const geo = (await geoRes.json()) as GeoResponse
 
     await LoginRecord.create({
-  user_id: userId,
-  wallet_address: walletAddress,
-  ip_address: ip,
-  country: geo.country ?? undefined,
-  region: geo.regionName ?? undefined,
-  city: geo.city ?? undefined,
-  user_agent: userAgent,
-  logged_at: new Date(),
-})
+      user_id: userId,
+      wallet_address: walletAddress,
+      ip_address: ip,
+      country: geo.country ?? undefined,
+      region: geo.regionName ?? undefined,
+      city: geo.city ?? undefined,
+      user_agent: userAgent,
+      logged_at: new Date(),
+    })
   } catch {
     console.error('로그인 기록 저장 실패')
   }

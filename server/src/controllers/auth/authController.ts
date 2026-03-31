@@ -29,7 +29,7 @@ export const verifyEmailCode = async (req: Request, res: Response) => {
 // ─── SMS 인증 ─────────────────────────────────────────────────
 
 // SMS 인증코드 발송
-export const sendSmsCode = async (req: Request, res: Response) => {
+/*export const sendSmsCode = async (req: Request, res: Response) => {
   try {
     const { phone } = req.body
     await authService.sendSmsCode(phone)
@@ -49,19 +49,29 @@ export const verifySmsCode = async (req: Request, res: Response) => {
     return res.status(400).json({ message: error.message })
   }
 }
-
+*/
 // ─── 회원가입 ─────────────────────────────────────────────────
 
 export const register = async (req: Request, res: Response) => {
   try {
     const {
-      email, password, name, phone, walletAddress, walletSignature,
-      terms_agreed, privacy_agreed, location_agreed, age_agreed,
+      email,
+      password,
+      name,
+      phone,
+      walletAddress,
+      walletSignature,
+      terms_agreed,
+      privacy_agreed,
+      location_agreed,
+      age_agreed,
       marketing_agreed,
     } = req.body
 
     if (!walletAddress) {
-      return res.status(400).json({ message: 'MetaMask 지갑 연결이 필요합니다' })
+      return res
+        .status(400)
+        .json({ message: 'MetaMask 지갑 연결이 필요합니다' })
     }
     if (!walletSignature) {
       return res.status(400).json({ message: '지갑 서명이 필요합니다' })

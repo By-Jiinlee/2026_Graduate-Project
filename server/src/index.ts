@@ -27,9 +27,9 @@ app.use(
 )
 
 // 라우터
+// 라우터
 app.use('/api/auth', authRouter)
-app.use('/api/auth', authRouter)
-app.use('/api/contract', contractTestRouter)
+app.use('/api/test', contractTestRouter)
 
 // DB 연결
 connectDB()

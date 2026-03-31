@@ -1,4 +1,14 @@
-import { createPublicClient, createWalletClient, http, getAddress, encodeAbiParameters, keccak256, concat, toBytes, toHex } from 'viem'
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  getAddress,
+  encodeAbiParameters,
+  keccak256,
+  concat,
+  toBytes,
+  toHex,
+} from 'viem'
 import { sepolia } from 'viem/chains'
 import { privateKeyToAccount } from 'viem/accounts'
 import fs from 'fs'
@@ -70,19 +80,19 @@ export const getTradeNonce = async (walletAddress: string): Promise<bigint> => {
 // ─── 서명 메시지 생성 헬퍼 (클라이언트 서명용) ────────────────
 
 // 로그인 서명 메시지 생성
-// 클라이언트에서 personal_sign 할 때 이 메시지를 사용
 export const buildAuthMessage = (
   walletAddress: string,
   nonce: bigint,
 ): `0x${string}` => {
-  return keccak256(
+  const innerHash = keccak256(
     concat([
-      toBytes(BigInt(sepolia.id)),           // chainid
-      toBytes(contractAddress),              // address(this)
-      toBytes(getAddress(walletAddress)),    // wallet
-      toBytes(nonce),                        // nonce
+      toBytes(BigInt(sepolia.id), { size: 32 }),
+      toBytes(contractAddress, { size: 20 }),
+      toBytes(getAddress(walletAddress), { size: 20 }),
+      toBytes(nonce, { size: 32 }),
     ]),
   )
+  return innerHash
 }
 
 // 거래 서명 메시지 생성
@@ -174,4 +184,12 @@ export const verifyTradeSignature = async (
   })
   await walletClient.writeContract(request)
   return true
+}
+export const signMessage = async (
+  message: `0x${string}`,
+): Promise<`0x${string}`> => {
+  const signature = await walletClient.signMessage({
+    message: { raw: message },
+  })
+  return signature
 }

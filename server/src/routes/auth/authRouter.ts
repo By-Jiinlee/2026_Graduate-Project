@@ -17,19 +17,39 @@ import {
 const router = Router()
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
-router.post('/email/send', emailCodeRateLimiter, validateEmailCode, authController.sendEmailCode)
-router.post('/email/verify', emailCodeRateLimiter, validateEmailCode, authController.verifyEmailCode)
+router.post(
+  '/email/send',
+  emailCodeRateLimiter,
+  validateEmailCode,
+  authController.sendEmailCode,
+)
+router.post(
+  '/email/verify',
+  emailCodeRateLimiter,
+  validateEmailCode,
+  authController.verifyEmailCode,
+)
 
 // ─── SMS 인증 ─────────────────────────────────────────────────
-router.post('/sms/send', smsCodeRateLimiter, validateSmsCode, authController.sendSmsCode)
-router.post('/sms/verify', smsCodeRateLimiter, validateSmsCode, authController.verifySmsCode)
+/*router.post('/sms/send', smsCodeRateLimiter, validateSmsCode, authController.sendSmsCode)
+router.post('/sms/verify', smsCodeRateLimiter, validateSmsCode, authController.verifySmsCode)*/
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 router.post('/register', validateRegister, authController.register)
 
 // ─── 로그인 ───────────────────────────────────────────────────
-router.post('/login/step1', loginRateLimiter, validateLoginStep1, authController.loginStep1)
-router.post('/login/step2', loginRateLimiter, validateLoginStep2, authController.loginStep2)
+router.post(
+  '/login/step1',
+  loginRateLimiter,
+  validateLoginStep1,
+  authController.loginStep1,
+)
+router.post(
+  '/login/step2',
+  loginRateLimiter,
+  validateLoginStep2,
+  authController.loginStep2,
+)
 
 // ─── 로그아웃 ─────────────────────────────────────────────────
 router.post('/logout', isAuthenticated, authController.logout)
