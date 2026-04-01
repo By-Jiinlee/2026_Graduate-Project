@@ -225,3 +225,39 @@ export const refreshToken = async (req: Request, res: Response) => {
     return res.status(401).json({ message: '유효하지 않은 토큰입니다' })
   }
 }
+// ─── 마이페이지 휴대폰 인증 ───────────────────────────────────
+
+export const sendPhoneCode = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { phone } = req.body
+    await authService.sendPhoneCode(userId, phone)
+    return res.status(200).json({ message: '인증코드가 발송되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+export const verifyPhoneCode = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { phone, code } = req.body
+    await authService.verifyPhoneCode(userId, phone, code)
+    return res.status(200).json({ message: '휴대폰 인증이 완료되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+export const getMyInfo = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const User = require('../../models/user/User').default
+    const user = await User.findByPk(userId, {
+      attributes: ['id', 'email', 'name', 'phone', 'is_phone_verified', 'role', 'status', 'created_at'],
+    })
+    return res.status(200).json(user)
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message })
+  }
+}

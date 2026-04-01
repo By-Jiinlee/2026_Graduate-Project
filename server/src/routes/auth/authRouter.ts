@@ -71,3 +71,9 @@ router.delete('/withdraw', isAuthenticated, authController.withdraw)
 router.post('/refresh', authController.refreshToken)
 
 export default router
+// ─── 마이페이지 휴대폰 인증 ───────────────────────────────────
+router.post('/phone/send', isAuthenticated, smsCodeRateLimiter, validateSmsCode, authController.sendPhoneCode)
+router.post('/phone/verify', isAuthenticated, smsCodeRateLimiter, validateSmsCode, authController.verifyPhoneCode)
+
+// ─── 내 정보 조회 ─────────────────────────────────────────────
+router.get('/me', isAuthenticated, authController.getMyInfo)

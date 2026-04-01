@@ -21,6 +21,7 @@ interface UserAttributes {
   created_at?: Date
   updated_at?: Date
   deleted_at?: Date
+  is_phone_verified: boolean
 }
 
 interface UserCreationAttributes extends Optional<UserAttributes, 'id'> {}
@@ -37,6 +38,7 @@ class User
   public role!: 'user' | 'admin'
   public is_email_verified!: boolean
   public is_locked!: boolean
+  public is_phone_verified!: boolean
   public status!: 'active' | 'dormant' | 'withdrawn'
   public terms_agreed!: boolean
   public privacy_agreed!: boolean
@@ -73,6 +75,7 @@ User.init(
       allowNull: false,
       defaultValue: 'active',
     },
+    is_phone_verified: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
     terms_agreed: {
       type: DataTypes.TINYINT,
       allowNull: false,

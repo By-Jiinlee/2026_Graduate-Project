@@ -8,6 +8,7 @@ import { connectDB } from './config/database'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
 
+
 dotenv.config()
 
 const app = express()

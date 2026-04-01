@@ -225,20 +225,21 @@ export const register = async (
   const password_hash = await bcrypt.hash(password, 12)
 
   const user = await User.create({
-    email,
-    password_hash,
-    name,
-    phone,
-    role: 'user',
-    is_email_verified: true,
-    is_locked: false,
-    status: 'active',
-    terms_agreed,
-    privacy_agreed,
-    location_agreed,
-    age_agreed,
-    marketing_agreed,
-  })
+  email,
+  password_hash,
+  name,
+  phone,
+  role: 'user',
+  is_email_verified: true,
+  is_locked: false,
+  status: 'active',
+  is_phone_verified: false,  // ← 추가
+  terms_agreed,
+  privacy_agreed,
+  location_agreed,
+  age_agreed,
+  marketing_agreed,
+})
 
   await registerWalletFor(walletAddress)
 
@@ -384,4 +385,72 @@ export const verifyAccessToken = (token: string) => {
 
 export const verifyRefreshToken = (token: string) => {
   return jwt.verify(token, process.env.JWT_REFRESH_SECRET as string)
+}
+// ─── 마이페이지 휴대폰 인증 ──────────────────────────────────
+
+export const sendPhoneCode = async (userId: number, phone: string): Promise<void> => {
+  // 이미 인증된 번호 확인
+  const existingUser = await User.findOne({ where: { phone } })
+  if (existingUser && existingUser.id !== userId) {
+    throw new Error('이미 사용 중인 휴대폰 번호입니다')
+  }
+
+  // 기존 미사용 코드 무효화
+  await SmsVerification.update(
+    { is_used: true },
+    { where: { phone, is_used: false } },
+  )
+
+  // 일 5회 제한
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  const sendCount = await SmsVerification.count({
+    where: { phone, created_at: { [Op.gte]: todayStart } },
+  })
+  if (sendCount >= 5) throw new Error('일일 인증 요청 한도를 초과했습니다')
+
+  // 1분 쿨타임
+  const lastSent = await SmsVerification.findOne({
+    where: { phone },
+    order: [['created_at', 'DESC']],
+  })
+  if (lastSent) {
+    const diff = Date.now() - new Date(lastSent.created_at!).getTime()
+    if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
+  }
+
+  const code = crypto.randomInt(100000, 999999).toString()
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
+
+  await SmsVerification.create({ phone, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  await sendVerificationSms(phone, code)
+}
+
+export const verifyPhoneCode = async (userId: number, phone: string, code: string): Promise<void> => {
+  const record = await SmsVerification.findOne({
+    where: { phone, is_used: false },
+    order: [['created_at', 'DESC']],
+  })
+
+  if (!record) throw new Error('인증코드가 존재하지 않습니다')
+  if (new Date() > record.expires_at) throw new Error('인증코드가 만료되었습니다')
+
+  if (record.fail_count >= 5) {
+    await record.update({ is_used: true })
+    throw new Error('인증 시도 횟수를 초과했습니다. 코드를 재발급 받으세요')
+  }
+
+  if (record.code !== code) {
+    await record.increment('fail_count')
+    const remaining = 4 - record.fail_count
+    throw new Error(`인증코드가 올바르지 않습니다. 남은 시도: ${remaining}회`)
+  }
+
+  await record.update({ is_used: true })
+
+  // 유저 휴대폰 번호 저장 + 인증 완료 처리
+  await User.update(
+    { phone, is_phone_verified: true },
+    { where: { id: userId } },
+  )
 }
