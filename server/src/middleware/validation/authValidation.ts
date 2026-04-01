@@ -6,7 +6,8 @@ const isValidEmail = (email: string): boolean => {
 }
 
 const isValidPassword = (password: string): boolean => {
-  const passwordRegex = /^(?=.*[a-zA-Z])(?=.*[0-9])(?=.*[!@#$%^&*])[a-zA-Z0-9!@#$%^&*]{8,}$/
+  const passwordRegex =
+    /^(?=.*[a-zA-Z])(?=.*[0-9])(?=.*[!@#$%^&*])[a-zA-Z0-9!@#$%^&*]{8,}$/
   return passwordRegex.test(password)
 }
 
@@ -37,21 +38,34 @@ const hasSqlInjection = (...values: string[]): boolean => {
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 
-export const validateRegister = (req: Request, res: Response, next: NextFunction) => {
+export const validateRegister = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   const {
-    email, password, name, phone, walletAddress, walletSignature,
-    terms_agreed, privacy_agreed, location_agreed, age_agreed,
+    email,
+    password,
+    name,
+    phone,
+    walletAddress,
+    walletSignature,
+    terms_agreed,
+    privacy_agreed,
+    location_agreed,
+    age_agreed,
   } = req.body
 
-  if (!email || !password || !name || !phone || !walletAddress || !walletSignature) {
+  if (!email || !password || !name || !walletAddress || !walletSignature) {
     return res.status(400).json({ message: '필수 항목을 모두 입력해주세요' })
   }
-
   if (!terms_agreed) {
     return res.status(400).json({ message: '서비스 이용약관에 동의해주세요' })
   }
   if (!privacy_agreed) {
-    return res.status(400).json({ message: '개인정보 수집 및 이용에 동의해주세요' })
+    return res
+      .status(400)
+      .json({ message: '개인정보 수집 및 이용에 동의해주세요' })
   }
   if (!location_agreed) {
     return res.status(400).json({ message: '위치정보 수집에 동의해주세요' })
@@ -64,16 +78,24 @@ export const validateRegister = (req: Request, res: Response, next: NextFunction
     return res.status(400).json({ message: '이메일 형식이 올바르지 않습니다' })
   }
   if (!isValidPassword(password)) {
-    return res.status(400).json({ message: '비밀번호는 8자 이상, 영문+숫자+특수문자를 포함해야 합니다' })
+    return res.status(400).json({
+      message: '비밀번호는 8자 이상, 영문+숫자+특수문자를 포함해야 합니다',
+    })
   }
   if (name.length < 2 || name.length > 50) {
-    return res.status(400).json({ message: '이름은 2자 이상 50자 이하로 입력해주세요' })
+    return res
+      .status(400)
+      .json({ message: '이름은 2자 이상 50자 이하로 입력해주세요' })
   }
-  if (!isValidPhone(phone)) {
-    return res.status(400).json({ message: '올바른 휴대폰 번호를 입력해주세요' })
+  if (phone && !isValidPhone(phone)) {
+    return res
+      .status(400)
+      .json({ message: '올바른 휴대폰 번호를 입력해주세요' })
   }
   if (!isValidWalletAddress(walletAddress)) {
-    return res.status(400).json({ message: '올바른 MetaMask 지갑 주소를 입력해주세요' })
+    return res
+      .status(400)
+      .json({ message: '올바른 MetaMask 지갑 주소를 입력해주세요' })
   }
   if (!isValidSignature(walletSignature)) {
     return res.status(400).json({ message: '올바른 지갑 서명값이 아닙니다' })
@@ -90,7 +112,11 @@ export const validateRegister = (req: Request, res: Response, next: NextFunction
 
 // ─── 로그인 1단계 ─────────────────────────────────────────────
 
-export const validateLoginStep1 = (req: Request, res: Response, next: NextFunction) => {
+export const validateLoginStep1 = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   const { email, password } = req.body
 
   if (!email || !password) {
@@ -111,7 +137,11 @@ export const validateLoginStep1 = (req: Request, res: Response, next: NextFuncti
 
 // ─── 로그인 2단계 ─────────────────────────────────────────────
 
-export const validateLoginStep2 = (req: Request, res: Response, next: NextFunction) => {
+export const validateLoginStep2 = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   const { userId, walletAddress, signature } = req.body
 
   if (!userId || !walletAddress || !signature) {
@@ -132,7 +162,11 @@ export const validateLoginStep2 = (req: Request, res: Response, next: NextFuncti
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 
-export const validateEmailCode = (req: Request, res: Response, next: NextFunction) => {
+export const validateEmailCode = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   const { email, code } = req.body
 
   if (!email) {
@@ -158,14 +192,20 @@ export const validateEmailCode = (req: Request, res: Response, next: NextFunctio
 
 // ─── SMS 인증 ─────────────────────────────────────────────────
 
-export const validateSmsCode = (req: Request, res: Response, next: NextFunction) => {
+export const validateSmsCode = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   const { phone, code } = req.body
 
   if (!phone) {
     return res.status(400).json({ message: '휴대폰 번호를 입력해주세요' })
   }
   if (!isValidPhone(phone)) {
-    return res.status(400).json({ message: '올바른 휴대폰 번호를 입력해주세요' })
+    return res
+      .status(400)
+      .json({ message: '올바른 휴대폰 번호를 입력해주세요' })
   }
   if (req.path.includes('verify')) {
     if (!code) {

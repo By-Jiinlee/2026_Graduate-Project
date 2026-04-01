@@ -38,7 +38,7 @@ export default function Navbar() {
           </div>
 
           <Link
-            to="/auth"
+            to="login"
             className="bg-[#22C55E] text-white px-8 py-3 rounded-md font-bold hover:bg-[#16A34A] transition text-sm inline-block text-center"
           >
             시작하기 →

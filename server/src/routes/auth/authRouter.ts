@@ -31,8 +31,18 @@ router.post(
 )
 
 // ─── SMS 인증 ─────────────────────────────────────────────────
-/*router.post('/sms/send', smsCodeRateLimiter, validateSmsCode, authController.sendSmsCode)
-router.post('/sms/verify', smsCodeRateLimiter, validateSmsCode, authController.verifySmsCode)*/
+router.post(
+  '/sms/send',
+  smsCodeRateLimiter,
+  validateSmsCode,
+  authController.sendSmsCode,
+)
+router.post(
+  '/sms/verify',
+  smsCodeRateLimiter,
+  validateSmsCode,
+  authController.verifySmsCode,
+)
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 router.post('/register', validateRegister, authController.register)

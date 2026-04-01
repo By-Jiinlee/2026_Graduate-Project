@@ -29,7 +29,7 @@ export const verifyEmailCode = async (req: Request, res: Response) => {
 // ─── SMS 인증 ─────────────────────────────────────────────────
 
 // SMS 인증코드 발송
-/*export const sendSmsCode = async (req: Request, res: Response) => {
+export const sendSmsCode = async (req: Request, res: Response) => {
   try {
     const { phone } = req.body
     await authService.sendSmsCode(phone)
@@ -49,7 +49,7 @@ export const verifySmsCode = async (req: Request, res: Response) => {
     return res.status(400).json({ message: error.message })
   }
 }
-*/
+
 // ─── 회원가입 ─────────────────────────────────────────────────
 
 export const register = async (req: Request, res: Response) => {

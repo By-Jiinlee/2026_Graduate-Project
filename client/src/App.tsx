@@ -8,7 +8,8 @@ import Community from './pages/Community'
 import Support from './pages/Support'
 import Events from './pages/Events'
 import MyPage from './pages/MyPage'
-import Auth from './pages/Auth' // Auth 페이지 추가
+import Register from './pages/Register'
+import Login from './pages/Login'
 
 function App() {
   return (
@@ -27,7 +28,8 @@ function App() {
         <Route path="/support" element={<Support />} />
         <Route path="/events" element={<Events />} />
         <Route path="/mypage" element={<MyPage />} />
-        <Route path="/auth" element={<Auth />} />{' '}
+        <Route path="/register" element={<Register />} />
+        <Route path="/login" element={<Login />} />
         {/* 시작하기 버튼을 위한 경로 추가 */}
       </Routes>
     </BrowserRouter>

@@ -100,7 +100,7 @@ export const verifyEmailCode = async (
 // ─── SMS 인증 ────────────────────────────────────────────────
 
 // SMS 인증코드 발송
-/*export const sendSmsCode = async (phone: string): Promise<void> => {
+export const sendSmsCode = async (phone: string): Promise<void> => {
   // 휴대폰 중복 확인
   const existing = await User.findOne({ where: { phone } })
   if (existing) throw new Error('이미 사용 중인 휴대폰 번호입니다')
@@ -129,15 +129,21 @@ export const verifyEmailCode = async (
     order: [['created_at', 'DESC']],
   })
   if (lastSent) {
-  const diff = Date.now() - new Date(lastSent.created_at!).getTime()
-  if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
-}
+    const diff = Date.now() - new Date(lastSent.created_at!).getTime()
+    if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
+  }
 
   // 6자리 코드 생성
   const code = crypto.randomInt(100000, 999999).toString()
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // 5분
 
-  await SmsVerification.create({ phone, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  await SmsVerification.create({
+    phone,
+    code,
+    expires_at: expiresAt,
+    is_used: false,
+    fail_count: 0,
+  })
   await sendVerificationSms(phone, code)
 }
 
@@ -152,7 +158,8 @@ export const verifySmsCode = async (
   })
 
   if (!record) throw new Error('인증코드가 존재하지 않습니다')
-  if (new Date() > record.expires_at) throw new Error('인증코드가 만료되었습니다')
+  if (new Date() > record.expires_at)
+    throw new Error('인증코드가 만료되었습니다')
 
   if (record.fail_count >= 5) {
     await record.update({ is_used: true })
@@ -166,7 +173,7 @@ export const verifySmsCode = async (
   }
 
   await record.update({ is_used: true })
-}*/
+}
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 
@@ -189,12 +196,14 @@ export const register = async (
   })
   if (!emailVerified) throw new Error('이메일 인증이 완료되지 않았습니다')
 
-  /*const smsVerified = await SmsVerification.findOne({
-    where: { phone, is_used: true },
-    order: [['created_at', 'DESC']],
-  })
-  if (!smsVerified) throw new Error('휴대폰 인증이 완료되지 않았습니다')
-*/
+  if (phone) {
+    const smsVerified = await SmsVerification.findOne({
+      where: { phone, is_used: true },
+      order: [['created_at', 'DESC']],
+    })
+    if (!smsVerified) throw new Error('휴대폰 인증이 완료되지 않았습니다')
+  }
+
   const existingWallet = await Wallet.findOne({
     where: { address: walletAddress },
   })
