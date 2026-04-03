@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { QueryTypes } from 'sequelize';
-import sequelize from '../../../../../../Downloads/2026_Graduate-Project-main - 복사본/2026_Graduate-Project-main - 복사본/server/src/config/database';
+import sequelize from '../../config/database';
 
 const APP_KEY = process.env.APP_KEY!;
 const APP_SECRET = process.env.KIS_MOCK_APP_SECRET!;

@@ -4,7 +4,7 @@ export default function About() {
     { name: '김시우', role: 'QA\n프론트엔드' },
     { name: '윤다혜', role: 'DB 관리자\n백엔드' },
     { name: '이경준', role: '웹 보안\n백엔드' },
-    { name: '이시준', role: '웹 보안\n백엔드' },
+    { name: '이시훈', role: '웹 보안\n백엔드' },
   ]
 
   return (

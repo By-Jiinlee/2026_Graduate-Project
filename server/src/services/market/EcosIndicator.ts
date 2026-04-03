@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { QueryTypes } from 'sequelize'
-import sequelize from '../../../../../../Downloads/2026_Graduate-Project-main - 복사본/2026_Graduate-Project-main - 복사본/server/src/config/database'
+import sequelize from '../../config/database'
 
 const ECOS_API_KEY = process.env.ECOS_API_KEY!
 const ECOS_BASE_URL = 'https://ecos.bok.or.kr/api/StatisticSearch'

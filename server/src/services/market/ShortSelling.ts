@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { QueryTypes } from 'sequelize'
-import sequelize from '../../../../../../Downloads/2026_Graduate-Project-main - 복사본/2026_Graduate-Project-main - 복사본/server/src/config/database'
+import sequelize from '../../config/database'
 import { getKisAccessToken } from './KisAuth'
 
 const APP_KEY = process.env.KIS_REAL_APP_KEY!
