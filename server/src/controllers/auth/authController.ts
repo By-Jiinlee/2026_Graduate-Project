@@ -96,6 +96,7 @@ export const register = async (req: Request, res: Response) => {
       userId: user.id,
     })
   } catch (error: any) {
+    console.error('register error:', error.message, error.errors)
     return res.status(400).json({ message: error.message })
   }
 }

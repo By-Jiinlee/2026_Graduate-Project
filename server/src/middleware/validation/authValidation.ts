@@ -22,7 +22,7 @@ const isValidPhone = (phone: string): boolean => {
 }
 
 const isValidSignature = (signature: string): boolean => {
-  const sigRegex = /^0x[a-fA-F0-9]{130}$/
+  const sigRegex = /^0x[a-fA-F0-9]{128,132}$/
   return sigRegex.test(signature)
 }
 
