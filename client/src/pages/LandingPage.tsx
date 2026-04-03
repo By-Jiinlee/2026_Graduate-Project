@@ -25,7 +25,7 @@ export default function LandingPage(): React.ReactElement {
           >
             투자의 기준을 높이다,
             <br />
-            <span style={{ color: '#4CAF4F' }}>UpTick</span>
+            <span style={{ color: '#22C55E' }}>UpTick</span>
           </h1>
           <p
             style={{
@@ -43,7 +43,7 @@ export default function LandingPage(): React.ReactElement {
           <Link to="/auth" style={{ textDecoration: 'none' }}>
             <button
               style={{
-                backgroundColor: '#4CAF4F',
+                backgroundColor: '#22C55E',
                 color: 'white',
                 padding: '14px 32px',
                 borderRadius: '8px',

@@ -54,10 +54,10 @@ export default function MyPage() {
                   프로필&개인정보
                 </h3>
                 <ul className="flex flex-col gap-3 text-sm text-gray-400">
-                  <li className="hover:text-[#4CAF4F] cursor-pointer transition">
+                  <li className="hover:text-[#22C55E] cursor-pointer transition">
                     프로필 변경
                   </li>
-                  <li className="hover:text-[#4CAF4F] cursor-pointer transition">
+                  <li className="hover:text-[#22C55E] cursor-pointer transition">
                     개인정보 변경
                   </li>
                 </ul>
@@ -67,10 +67,10 @@ export default function MyPage() {
                   보안 및 인증
                 </h3>
                 <ul className="flex flex-col gap-3 text-sm text-gray-400">
-                  <li className="hover:text-[#4CAF4F] cursor-pointer transition">
+                  <li className="hover:text-[#22C55E] cursor-pointer transition">
                     비밀번호 및 보안
                   </li>
-                  <li className="hover:text-[#4CAF4F] cursor-pointer transition">
+                  <li className="hover:text-[#22C55E] cursor-pointer transition">
                     로그인 기록
                   </li>
                 </ul>
@@ -80,10 +80,10 @@ export default function MyPage() {
                   알림&환경설정
                 </h3>
                 <ul className="flex flex-col gap-3 text-sm text-gray-400">
-                  <li className="hover:text-[#4CAF4F] cursor-pointer transition">
+                  <li className="hover:text-[#22C55E] cursor-pointer transition">
                     알림
                   </li>
-                  <li className="hover:text-[#4CAF4F] cursor-pointer transition">
+                  <li className="hover:text-[#22C55E] cursor-pointer transition">
                     커뮤니티
                   </li>
                 </ul>
