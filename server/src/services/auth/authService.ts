@@ -17,14 +17,38 @@ import {
 import { sendVerificationEmail } from './emailService'
 import { sendVerificationSms } from './smsService'
 import { Op } from 'sequelize'
+import Blacklist from '../../models/auth/Blacklist'
+import WithdrawnUser from '../../models/auth/WithdrawnUser'
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 
 // 이메일 인증코드 발송
 export const sendEmailCode = async (email: string): Promise<void> => {
-  // 이메일 중복 확인
-  const existing = await User.findOne({ where: { email } })
+  // 블랙리스트 확인
+  const blacklisted = await Blacklist.findOne({ where: { email } })
+  if (blacklisted) throw new Error('이용이 제한된 계정입니다')
+
+  // 탈퇴 후 30일 이내 재가입 체크
+  const withdrawn = await WithdrawnUser.findOne({
+    where: {
+      email,
+      is_deleted: false,
+      expires_at: { [Op.gt]: new Date() },
+    },
+  })
+  if (withdrawn) {
+    const daysLeft = Math.ceil(
+      (new Date(withdrawn.expires_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+    )
+    throw new Error(`탈퇴 후 ${daysLeft}일 후에 재가입 가능합니다`)
+  }
+
+  // 이메일 중복 확인 (withdrawn 제외)
+  const existing = await User.findOne({
+    where: { email, status: { [Op.ne]: 'withdrawn' } },
+  })
   if (existing) throw new Error('이미 사용 중인 이메일입니다')
+  // ... 나머지 기존 코드 유지
 
   // 기존 미사용 코드 무효화
   await EmailVerification.update(
@@ -368,8 +392,23 @@ export const withdraw = async (userId: number) => {
     await unregisterWallet(wallet.address)
   }
 
-  // 소프트 삭제
+  // withdrawn_users에 개인정보 이관
+  await WithdrawnUser.create({
+    original_user_id: user.id,
+    email: user.email,
+    name: user.name,
+    phone: user.phone ?? undefined,
+    wallet_address: wallet?.address ?? undefined,
+    withdrawn_at: new Date(),
+    expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30일 후
+    is_deleted: false,
+  })
+
+  // users 테이블 개인정보 마스킹
   await user.update({
+    email: `withdrawn_${user.id}@deleted.com`,
+    name: '탈퇴회원',
+    phone: null,
     status: 'withdrawn',
     deleted_at: new Date(),
   })
