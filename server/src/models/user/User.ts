@@ -6,7 +6,7 @@ interface UserAttributes {
   email: string
   password_hash: string
   name: string
-  phone: string
+  phone: string | null
   role: 'user' | 'admin'
   is_email_verified: boolean
   is_locked: boolean
@@ -34,7 +34,7 @@ class User
   public email!: string
   public password_hash!: string
   public name!: string
-  public phone!: string
+  public phone!: string | null
   public role!: 'user' | 'admin'
   public is_email_verified!: boolean
   public is_locked!: boolean

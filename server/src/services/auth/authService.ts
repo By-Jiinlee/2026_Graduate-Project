@@ -228,7 +228,7 @@ export const register = async (
   email,
   password_hash,
   name,
-  phone,
+  phone: phone || null,
   role: 'user',
   is_email_verified: true,
   is_locked: false,

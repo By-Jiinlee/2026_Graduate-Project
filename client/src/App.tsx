@@ -5,6 +5,8 @@ import Dashboard from './pages/Dashboard'
 import StockList from './pages/StockList'
 import About from './pages/About'
 import Community from './pages/Community'
+import PostDetail from './pages/PostDetail';
+import WritePost from './pages/WritePost';
 import Support from './pages/Support'
 import Events from './pages/Events'
 import MyPage from './pages/MyPage'
@@ -25,6 +27,8 @@ function App() {
         <Route path="/stocks" element={<StockList />} />
         <Route path="/about" element={<About />} />
         <Route path="/community" element={<Community />} />
+        <Route path="/community/:id" element={<PostDetail />} />
+        <Route path="/community/write" element={<WritePost />} />
         <Route path="/support" element={<Support />} />
         <Route path="/events" element={<Events />} />
         <Route path="/mypage" element={<MyPage />} />
