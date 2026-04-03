@@ -75,7 +75,7 @@ export default function Login() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
-      navigate('/')
+window.location.href = '/'  // ← navigate('/') 대신
     } catch (err: any) {
       setError(err.message)
     }

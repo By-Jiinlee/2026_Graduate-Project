@@ -145,29 +145,36 @@ export const loginStep2 = async (req: Request, res: Response) => {
     )
 
     res.cookie('accessToken', accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 1000 * 60 * 60, // 1시간
-    })
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  maxAge: 1000 * 60 * 10, // 10분
+})
 
-    res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7일
-    })
+res.cookie('refreshToken', refreshToken, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  maxAge: 1000 * 60 * 60 * 24 * 7, // 7일
+})
 
-    return res.status(200).json({
-      message: '로그인 성공',
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        walletAddress,
-      },
-    })
+res.cookie('isLoggedIn', 'true', {
+  httpOnly: false,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict',
+  maxAge: 1000 * 60 * 10, // 10분
+})
+
+return res.status(200).json({
+  message: '로그인 성공',
+  user: {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    walletAddress,
+  },
+})
   } catch (error: any) {
     return res.status(400).json({ message: error.message })
   }
@@ -179,6 +186,7 @@ export const logout = async (req: Request, res: Response) => {
   try {
     res.clearCookie('accessToken')
     res.clearCookie('refreshToken')
+    res.clearCookie('isLoggedIn')
     return res.status(200).json({ message: '로그아웃 되었습니다' })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })

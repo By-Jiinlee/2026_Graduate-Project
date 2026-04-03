@@ -61,7 +61,7 @@ const createLimiter = (
 
 // 로그인 Rate Limiter: 5회 실패 시 15분 차단
 export const loginRateLimiter = createLimiter(loginStore, {
-  maxAttempts: 5,
+  maxAttempts: 15,
   windowMs: 15 * 60 * 1000,
   blockMs: 15 * 60 * 1000,
   message: '로그인 시도 횟수를 초과했습니다. 15분 후 다시 시도해주세요',
