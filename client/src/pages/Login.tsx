@@ -15,21 +15,23 @@ export default function Login() {
 
   // ─── 로그인 1단계 ─────────────────────────────────────────────
   const handleLoginStep1 = async () => {
-    try {
-      setError('')
-      const res = await fetch('http://localhost:3000/api/auth/login/step1', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.message)
-      setLoginData(data)
-      setStep(2)
-    } catch (err: any) {
-      setError(err.message)
-    }
+  try {
+    setError('')
+    const res = await fetch('http://localhost:3000/api/auth/login/step1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password }),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.message)
+
+    setLoginData(data)
+    setStep(2)
+  } catch (err: any) {
+    setError(err.message)
   }
+}
 
   // ─── 로그인 2단계 ─────────────────────────────────────────────
   const handleLoginStep2 = async () => {
@@ -75,7 +77,9 @@ export default function Login() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
-window.location.href = '/'  // ← navigate('/') 대신
+        localStorage.setItem('loginTime', Date.now().toString())
+window.location.href = '/'
+
     } catch (err: any) {
       setError(err.message)
     }

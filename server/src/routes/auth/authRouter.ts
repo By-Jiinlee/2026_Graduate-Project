@@ -77,3 +77,4 @@ router.post('/phone/verify', isAuthenticated, smsCodeRateLimiter, validateSmsCod
 
 // ─── 내 정보 조회 ─────────────────────────────────────────────
 router.get('/me', isAuthenticated, authController.getMyInfo)
+

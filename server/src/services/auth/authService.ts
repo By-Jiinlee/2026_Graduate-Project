@@ -48,7 +48,7 @@ export const sendEmailCode = async (email: string): Promise<void> => {
     where: { email, status: { [Op.ne]: 'withdrawn' } },
   })
   if (existing) throw new Error('이미 사용 중인 이메일입니다')
-  // ... 나머지 기존 코드 유지
+
 
   // 기존 미사용 코드 무효화
   await EmailVerification.update(
@@ -285,21 +285,16 @@ export const register = async (
 export const loginStep1 = async (email: string, password: string) => {
   const user = await User.findOne({ where: { email } })
   if (!user) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
-  if (user.is_locked)
-    throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
+  if (user.is_locked) throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
   if (user.status === 'withdrawn') throw new Error('탈퇴한 계정입니다')
 
   const isMatch = await bcrypt.compare(password, user.password_hash)
   if (!isMatch) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
 
-  const wallet = await Wallet.findOne({
-    where: { user_id: user.id, is_primary: true },
-  })
+  const wallet = await Wallet.findOne({ where: { user_id: user.id, is_primary: true } })
   if (!wallet) throw new Error('지갑이 등록되지 않은 계정입니다')
 
-  // 온체인 nonce 조회
   const nonce = await getAuthNonce(wallet.address)
-
   return {
     userId: user.id,
     walletAddress: wallet.address,

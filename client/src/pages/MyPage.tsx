@@ -31,7 +31,6 @@ export default function MyPage() {
       setWithdrawLoading(false)
     }
   }
-
   return (
     <div className="w-full min-h-screen bg-white pb-20 font-sans text-gray-800">
       <div className="container mx-auto px-6 max-w-5xl">
@@ -90,7 +89,6 @@ export default function MyPage() {
             </div>
           </div>
         </section>
-
         {/* 탈퇴 섹션 */}
         <section className="py-12">
           <h2 className="text-2xl font-black mb-4 text-red-500">회원 탈퇴</h2>

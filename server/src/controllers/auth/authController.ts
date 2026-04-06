@@ -107,17 +107,13 @@ export const register = async (req: Request, res: Response) => {
 export const loginStep1 = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body
-
-    const { userId, walletAddress, nonce } = await authService.loginStep1(
-      email,
-      password,
-    )
+    const result = await authService.loginStep1(email, password)
 
     return res.status(200).json({
       message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
-      userId,
-      walletAddress,
-      nonce,
+      userId: result.userId,
+      walletAddress: result.walletAddress,
+      nonce: result.nonce,
     })
   } catch (error: any) {
     return res.status(400).json({ message: error.message })
