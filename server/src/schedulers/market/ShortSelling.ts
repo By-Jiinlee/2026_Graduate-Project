@@ -40,7 +40,7 @@ export const collectShortSelling = async (): Promise<void> => {
                 console.log(`[ShortSelling] ${stock.code} 완료 (${rows.length}건)`)
             }
 
-            await new Promise((r) => setTimeout(r, 200))
+            await new Promise((r) => setTimeout(r, 500))
         } catch (err) {
             console.error(`[ShortSelling] 오류 - ${stock.code}:`, err)
         }

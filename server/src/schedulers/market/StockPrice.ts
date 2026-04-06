@@ -45,6 +45,6 @@ export const startStockPriceScheduler = () => {
 
     console.log("[StockPrice] 스케줄러 등록 완료 (평일 16:00 KST)");
 
-    // 필요 시 서버 구동 즉시 실행 테스트를 원하면 아래 주석 해제
-    // collectStockPrices();
+
+    collectStockPrices();
 };

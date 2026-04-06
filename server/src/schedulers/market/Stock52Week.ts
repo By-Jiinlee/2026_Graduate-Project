@@ -42,7 +42,7 @@ export const collectStock52Week = async (): Promise<void> => {
 export const startStock52WeekScheduler = (): void => {
     // 평일 16:30 (장 마감 후 1시간)
     cron.schedule(
-        '30 16 * * 1-5',
+        '10 16 * * 1-5',
         () => {
             collectStock52Week().catch((err) =>
                 console.error('[Stock52Week] 스케줄러 오류:', err)

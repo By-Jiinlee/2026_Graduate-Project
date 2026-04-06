@@ -19,6 +19,11 @@ import shortSellingRouter from './routes/market/ShortSelling'
 import { startShortSellingScheduler } from './schedulers/market/ShortSelling'
 import { startStock52WeekScheduler } from './schedulers/market/Stock52Week'
 import { startForeignAndInstitutionalScheduler } from './schedulers/market/ForeignAndInstitutional'
+import { startMarketIndexScheduler } from './schedulers/market/MarketIndex'
+import { startListedSharesScheduler } from './schedulers/market/ListedShares'
+import { startMinuteCandleScheduler } from './schedulers/market/MinuteCandle'
+import { startStabilityScheduler } from './schedulers/market/Stability'
+
 
 dotenv.config()
 
@@ -52,12 +57,19 @@ connectDB()
 // 서버 실행
 app.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
-    //startStockPriceScheduler()
-    //startFinancialStatementScheduler()
-    //startEcosIndicatorScheduler()
-    //startShortSellingScheduler()
-    //startStock52WeekScheduler()
-    //startForeignAndInstitutionalScheduler()
-})
+    // 1단계
+    //startStockPriceScheduler() //일봉
+    //startMarketIndexScheduler() //미국주요지수
 
-export default app
+// 2단계
+    //startStock52WeekScheduler() //52주 신고가 신저가
+    //startForeignAndInstitutionalScheduler() //투자자별 거래량
+    //startShortSellingScheduler() //공매도
+    //startMinuteCandleScheduler() //일분봉
+    //tartListedSharesScheduler() //상장주식수
+
+// 3단계
+    startStabilityScheduler() //안정성 계산
+    //startFinancialStatementScheduler()    //재무제표
+    //startEcosIndicatorScheduler() //거시경제
+})

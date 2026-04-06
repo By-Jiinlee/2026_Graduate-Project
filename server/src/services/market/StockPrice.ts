@@ -2,8 +2,8 @@ import axios from 'axios';
 import { QueryTypes } from 'sequelize';
 import sequelize from '../../config/database';
 
-const APP_KEY = process.env.APP_KEY!;
-const APP_SECRET = process.env.KIS_MOCK_APP_SECRET!;
+const APP_KEY = process.env.KIS_REAL_APP_KEY!;
+const APP_SECRET = process.env.KIS_REAL_APP_SECRET!;
 const BASE_URL = 'https://openapi.koreainvestment.com:9443';
 
 // ─── 토큰 관리 (메모리 캐싱) ──────────────────────────────

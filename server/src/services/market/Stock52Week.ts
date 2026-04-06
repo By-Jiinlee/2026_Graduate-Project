@@ -12,46 +12,52 @@ interface Stock52WeekRow {
     high_52week_date: string | null
     low_52week: number | null
     low_52week_date: string | null
+    market_cap: number | null
 }
 
 // ─── DB 계산 ──────────────────────────────────────────────────
 
 export const calculate52Week = async (targetDate: string): Promise<Stock52WeekRow[]> => {
-    // stock_prices 테이블에서 52주 고가/저가 계산
     return sequelize.query<Stock52WeekRow>(
         `SELECT
-       s.code AS stock_code,
-       :targetDate AS trade_date,
-       today.close AS close_price,
-       ROUND((today.close - prev.close) / prev.close * 100, 2) AS change_rate,
-       MAX(sp.high) AS high_52week,
+             s.code AS stock_code,
+             :targetDate AS trade_date,
+             today.close AS close_price,
+             ROUND((today.close - prev.close) / prev.close * 100, 2) AS change_rate,
+             w.high_52week,
+             (
+                 SELECT price_date FROM stock_prices
+                 WHERE stock_id = s.id
+                   AND high = w.high_52week
+                   AND price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
+                   AND price_date <= :targetDate
+                 ORDER BY price_date DESC LIMIT 1
+             ) AS high_52week_date,
+       w.low_52week,
        (
          SELECT price_date FROM stock_prices
-         WHERE stock_id = s.id AND high = MAX(sp.high)
+         WHERE stock_id = s.id
+           AND low = w.low_52week
            AND price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
            AND price_date <= :targetDate
          ORDER BY price_date DESC LIMIT 1
-       ) AS high_52week_date,
-       MIN(sp.low) AS low_52week,
-       (
-         SELECT price_date FROM stock_prices
-         WHERE stock_id = s.id AND low = MIN(sp.low)
-           AND price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
-           AND price_date <= :targetDate
-         ORDER BY price_date DESC LIMIT 1
-       ) AS low_52week_date
-     FROM stocks s
-     JOIN stock_prices sp ON sp.stock_id = s.id
-       AND sp.price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
-       AND sp.price_date <= :targetDate
-     JOIN stock_prices today ON today.stock_id = s.id AND today.price_date = :targetDate
-     LEFT JOIN stock_prices prev ON prev.stock_id = s.id
-       AND prev.price_date = (
-         SELECT MAX(price_date) FROM stock_prices
-         WHERE stock_id = s.id AND price_date < :targetDate
-       )
-     WHERE s.is_active = 1 AND s.market IN ('KOSPI', 'KOSDAQ')
-     GROUP BY s.id, s.code, today.close, prev.close`,
+       ) AS low_52week_date,
+       FLOOR(today.close * s.listed_shares / 1000000) AS market_cap
+         FROM stocks s
+             JOIN (
+             SELECT stock_id, MAX(high) AS high_52week, MIN(low) AS low_52week
+             FROM stock_prices
+             WHERE price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
+             AND price_date <= :targetDate
+             GROUP BY stock_id
+             ) w ON w.stock_id = s.id
+             JOIN stock_prices today ON today.stock_id = s.id AND today.price_date = :targetDate
+             LEFT JOIN stock_prices prev ON prev.stock_id = s.id
+             AND prev.price_date = (
+             SELECT MAX(price_date) FROM stock_prices
+             WHERE stock_id = s.id AND price_date < :targetDate
+             )
+         WHERE s.is_active = 1 AND s.market IN ('KOSPI', 'KOSDAQ')`,
         {
             replacements: { targetDate },
             type: QueryTypes.SELECT,
@@ -62,7 +68,7 @@ export const calculate52Week = async (targetDate: string): Promise<Stock52WeekRo
 export const upsert52Week = async (rows: Stock52WeekRow[]): Promise<void> => {
     if (rows.length === 0) return
 
-    const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?)').join(',')
+    const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?,?)').join(',')
     const flat = rows.flatMap((r) => [
         r.stock_code,
         r.trade_date,
@@ -72,20 +78,22 @@ export const upsert52Week = async (rows: Stock52WeekRow[]): Promise<void> => {
         r.high_52week_date,
         r.low_52week,
         r.low_52week_date,
+        r.market_cap,
     ])
 
     await sequelize.query(
         `INSERT INTO stock_52week
-       (stock_code, trade_date, close_price, change_rate,
-        high_52week, high_52week_date, low_52week, low_52week_date)
-     VALUES ${placeholders}
-     ON DUPLICATE KEY UPDATE
-       close_price      = VALUES(close_price),
-       change_rate      = VALUES(change_rate),
-       high_52week      = VALUES(high_52week),
-       high_52week_date = VALUES(high_52week_date),
-       low_52week       = VALUES(low_52week),
-       low_52week_date  = VALUES(low_52week_date)`,
+         (stock_code, trade_date, close_price, change_rate,
+          high_52week, high_52week_date, low_52week, low_52week_date, market_cap)
+         VALUES ${placeholders}
+             ON DUPLICATE KEY UPDATE
+                                  close_price      = VALUES(close_price),
+                                  change_rate      = VALUES(change_rate),
+                                  high_52week      = VALUES(high_52week),
+                                  high_52week_date = VALUES(high_52week_date),
+                                  low_52week       = VALUES(low_52week),
+                                  low_52week_date  = VALUES(low_52week_date),
+                                  market_cap       = VALUES(market_cap)`,
         { replacements: flat, type: QueryTypes.INSERT }
     )
 }

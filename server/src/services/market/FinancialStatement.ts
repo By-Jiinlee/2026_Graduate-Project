@@ -48,6 +48,7 @@ export const syncCorpCodes = async (): Promise<void> => {
 
     const corps: CorpInfo[] = parsed?.result?.list ?? []
     const listed = corps.filter((c) => c.stock_code && String(c.stock_code).trim() !== '')
+    console.log('[FinancialStatement] 샘플 종목코드:', listed.slice(0, 3).map(c => c.stock_code))
 
     for (const corp of listed) {
         await sequelize.query(
@@ -55,7 +56,7 @@ export const syncCorpCodes = async (): Promise<void> => {
             {
                 replacements: {
                     corp_code: String(corp.corp_code).trim(),
-                    stock_code: String(corp.stock_code).trim(),
+                    stock_code: String(corp.stock_code).trim().padStart(6, '0'),
                 },
                 type: QueryTypes.UPDATE,
             }
