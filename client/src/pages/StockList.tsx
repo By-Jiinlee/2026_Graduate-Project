@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 
 interface StockData {
   id: number;
@@ -41,6 +42,24 @@ const StockList: React.FC = () => {
     // 로컬 스토리지에서 기존 즐겨찾기 불러오기 (임시 저장용)
     const savedFavs = localStorage.getItem('uptick_favs');
     if (savedFavs) setFavorites(JSON.parse(savedFavs));
+
+    // 실시간 시세 구독
+    const socket = io('http://localhost:3000');
+    socket.on('stock:price', (data: {
+      code: string;
+      price: number;
+      change: number;
+      changeRate: number;
+      volume: number;
+    }) => {
+      setStocks(prev => prev.map(stock =>
+        stock.code === data.code
+          ? { ...stock, price: data.price, change: data.change, changeRate: data.changeRate, volume: data.volume }
+          : stock
+      ));
+    });
+
+    return () => { socket.disconnect(); };
   }, []);
 
   // --- 2. 즐겨찾기 토글 함수 ---
@@ -53,16 +72,17 @@ const StockList: React.FC = () => {
     localStorage.setItem('uptick_favs', JSON.stringify(newFavs));
   };
 
-  // --- 3. 필터링 및 검색 로직 (market 필터 추가) ---
+  // --- 3. 필터링 및 검색 로직 ---
   const filteredStocks = useMemo(() => {
-    return stocks.filter(stock => {
-      const matchSearch = stock.name.toLowerCase().includes(searchTerm.toLowerCase()) || stock.code.includes(searchTerm);
-      
-      // 시장 필터 (현재 API 응답에 market 정보가 포함되어야 정확히 작동합니다)
-      const matchMarket = selectedMarket === '전체' || stock.market === selectedMarket;
-      
-      return matchSearch && matchMarket;
-    });
+    const marketMap: Record<string, string> = { '코스피': 'KOSPI', '코스닥': 'KOSDAQ' }
+
+    return stocks
+      .filter(stock => {
+        const matchSearch = stock.name.toLowerCase().includes(searchTerm.toLowerCase()) || stock.code.includes(searchTerm);
+        const matchMarket = selectedMarket === '전체' || stock.market === marketMap[selectedMarket];
+        return matchSearch && matchMarket;
+      })
+      .sort((a, b) => Number(b.volume) - Number(a.volume));
   }, [stocks, searchTerm, selectedMarket]);
 
   // 즐겨찾는 종목만 따로 추출 (우측 사이드바용)

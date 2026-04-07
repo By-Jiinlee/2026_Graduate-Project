@@ -72,6 +72,53 @@ export const getStockPrices = async (req: Request, res: Response): Promise<void>
 }
 
 /**
+ * [GET] 종목 기본정보 + 최근 90일 일봉 (상세 페이지용)
+ * 주소: GET /api/market/stock-prices/:stockId/detail
+ */
+export const getStockDetail = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { stockId } = req.params
+
+        const [info] = await sequelize.query<{
+            id: number; name: string; code: string; market: string;
+            price: number; change: number; changeRate: number; volume: number;
+        }>(
+            `SELECT s.id, s.name, s.code, s.market,
+                    sp.close AS price,
+                    (sp.close - sp.open) AS \`change\`,
+                    ((sp.close - sp.open) / sp.open * 100) AS changeRate,
+                    sp.volume
+             FROM stocks s
+             JOIN stock_prices sp ON s.id = sp.stock_id
+             WHERE s.id = :stockId
+               AND sp.price_date = (SELECT MAX(price_date) FROM stock_prices WHERE stock_id = :stockId)`,
+            { replacements: { stockId }, type: QueryTypes.SELECT }
+        )
+
+        const candles = await sequelize.query<{
+            time: string; open: number; high: number; low: number; close: number; volume: number;
+        }>(
+            `SELECT * FROM (
+                SELECT DATE_FORMAT(price_date, '%Y-%m-%d') AS time,
+                       open, high, low, close, volume
+                FROM stock_prices
+                WHERE stock_id = :stockId
+                ORDER BY price_date DESC
+                LIMIT 90
+             ) t ORDER BY time ASC`,
+            { replacements: { stockId }, type: QueryTypes.SELECT }
+        )
+
+        if (!info) { res.status(404).json({ success: false, message: '종목을 찾을 수 없습니다' }); return }
+
+        res.json({ success: true, info, candles })
+    } catch (err) {
+        console.error('[StockPrice] 상세 조회 오류:', err)
+        res.status(500).json({ success: false, message: '상세 조회 실패' })
+    }
+}
+
+/**
  * [POST] 수동 수집 트리거 (기본 유지)
  */
 export const triggerCollect = async (_req: Request, res: Response): Promise<void> => {

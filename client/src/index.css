@@ -7,6 +7,11 @@ body {
   margin: 0;
 }
 
+/* lightweight-charts TradingView 로고 제거 */
+.tv-lightweight-charts a[href*="tradingview"] {
+  display: none !important;
+}
+
 #root {
   min-height: 100vh;
   display: flex;

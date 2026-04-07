@@ -1,8 +1,9 @@
 import { Router } from 'express'
-import { 
-    getStockPrices, 
-    triggerCollect, 
-    getAllLatestPrices // 1. 전체 조회 컨트롤러 추가
+import {
+    getStockPrices,
+    triggerCollect,
+    getAllLatestPrices,
+    getStockDetail,
 } from '../../controllers/market/StockPrice'
 
 const router = Router()
@@ -18,6 +19,7 @@ router.get('/all', getAllLatestPrices)
  * [GET] 특정 종목의 기간별 상세 시세 조회
  * 주소: GET /api/market/stock-prices/:stockId?from=YYYY-MM-DD&to=YYYY-MM-DD
  */
+router.get('/:stockId/detail', getStockDetail)
 router.get('/:stockId', getStockPrices)
 
 /**

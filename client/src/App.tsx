@@ -13,6 +13,7 @@ import Events from './pages/Events'
 import MyPage from './pages/MyPage'
 import Register from './pages/Register'
 import Login from './pages/Login'
+import StockDetail from './pages/StockDetail'
 
 const isLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
@@ -86,6 +87,7 @@ function App() {
         <Route path="/stock" element={<StockList />} />
         <Route path="/stocks" element={<StockList />} />
         <Route path="/about" element={<About />} />
+        <Route path="/stock/:stockId" element={<StockDetail />} />
         <Route path="/register" element={<Register />} />
         <Route path="/login" element={<Login />} />
 

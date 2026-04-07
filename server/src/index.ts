@@ -1,4 +1,6 @@
 import express from 'express'
+import { createServer } from 'http'
+import { Server } from 'socket.io'
 import dotenv from 'dotenv'
 import cors from 'cors'
 import helmet from 'helmet'
@@ -23,11 +25,19 @@ import { startMarketIndexScheduler } from './schedulers/market/MarketIndex'
 import { startListedSharesScheduler } from './schedulers/market/ListedShares'
 import { startMinuteCandleScheduler } from './schedulers/market/MinuteCandle'
 import { startStabilityScheduler } from './schedulers/market/Stability'
+import { startKisRealtime } from './services/market/KisRealtime'
 
 
 dotenv.config()
 
 const app = express()
+const httpServer = createServer(app)
+const io = new Server(httpServer, {
+    cors: {
+        origin: 'http://localhost:5173',
+        credentials: true,
+    },
+})
 const PORT = process.env.PORT || 3000
 
 // 미들웨어
@@ -55,7 +65,7 @@ app.use('/api/market/short-selling', shortSellingRouter)
 connectDB()
 
 // 서버 실행
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
     // 1단계
     //startStockPriceScheduler() //일봉
@@ -72,4 +82,7 @@ app.listen(PORT, () => {
     startStabilityScheduler() //안정성 계산
     //startFinancialStatementScheduler()    //재무제표
     //startEcosIndicatorScheduler() //거시경제
+
+    // 실시간 시세
+    startKisRealtime(io)
 })

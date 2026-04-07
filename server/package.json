@@ -26,8 +26,10 @@
     "nodemailer": "^8.0.4",
     "sequelize": "^6.37.8",
     "sequelize-typescript": "^2.1.6",
+    "socket.io": "^4.8.3",
     "uuid": "^13.0.0",
-    "viem": "^2.47.6"
+    "viem": "^2.47.6",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
@@ -42,6 +44,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/nodemailer": "^7.0.11",
     "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.2"
