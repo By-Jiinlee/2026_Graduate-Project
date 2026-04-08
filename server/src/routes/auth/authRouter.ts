@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import * as authController from '../../controllers/auth/authController'
 import { isAuthenticated } from '../../middleware/auth/authMiddleware'
+import { checkAccountLock, analyzeAfterLogin } from '../../middleware/auth/anomalyMiddleware'
 import {
   validateRegister,
   validateLoginStep1,
@@ -18,47 +19,53 @@ const router = Router()
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 router.post(
-  '/email/send',
-  emailCodeRateLimiter,
-  validateEmailCode,
-  authController.sendEmailCode,
+    '/email/send',
+    emailCodeRateLimiter,
+    validateEmailCode,
+    authController.sendEmailCode,
 )
 router.post(
-  '/email/verify',
-  emailCodeRateLimiter,
-  validateEmailCode,
-  authController.verifyEmailCode,
+    '/email/verify',
+    emailCodeRateLimiter,
+    validateEmailCode,
+    authController.verifyEmailCode,
 )
 
 // ─── SMS 인증 ─────────────────────────────────────────────────
 router.post(
-  '/sms/send',
-  smsCodeRateLimiter,
-  validateSmsCode,
-  authController.sendSmsCode,
+    '/sms/send',
+    smsCodeRateLimiter,
+    validateSmsCode,
+    authController.sendSmsCode,
 )
 router.post(
-  '/sms/verify',
-  smsCodeRateLimiter,
-  validateSmsCode,
-  authController.verifySmsCode,
+    '/sms/verify',
+    smsCodeRateLimiter,
+    validateSmsCode,
+    authController.verifySmsCode,
 )
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 router.post('/register', validateRegister, authController.register)
 
 // ─── 로그인 ───────────────────────────────────────────────────
+// Step1: ① checkAccountLock(잠금확인) → ② loginStep1 → ③ analyzeAfterLogin(brute force 기록)
 router.post(
   '/login/step1',
   loginRateLimiter,
+  checkAccountLock,
   validateLoginStep1,
   authController.loginStep1,
+  analyzeAfterLogin,
 )
+
+// Step2: ① loginStep2 → ② analyzeAfterLogin(시간대/동시세션/국가 탐지)
 router.post(
   '/login/step2',
   loginRateLimiter,
   validateLoginStep2,
   authController.loginStep2,
+  analyzeAfterLogin,
 )
 
 // ─── 로그아웃 ─────────────────────────────────────────────────
@@ -77,4 +84,8 @@ router.post('/phone/verify', isAuthenticated, smsCodeRateLimiter, validateSmsCod
 
 // ─── 내 정보 조회 ─────────────────────────────────────────────
 router.get('/me', isAuthenticated, authController.getMyInfo)
+
+// ─── 신뢰 기기 관리 ──────────────────────────────────────────
+router.get('/devices', isAuthenticated, authController.listTrustedDevices)
+router.delete('/devices/:deviceId', isAuthenticated, authController.removeTrustedDevice)
 

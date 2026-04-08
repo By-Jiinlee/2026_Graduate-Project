@@ -68,7 +68,7 @@ connectDB()
 httpServer.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
     // 1단계
-    //startStockPriceScheduler() //일봉
+    startStockPriceScheduler() //일봉
     //startMarketIndexScheduler() //미국주요지수
 
 // 2단계

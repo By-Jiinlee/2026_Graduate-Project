@@ -309,6 +309,7 @@ export const loginStep2 = async (
   signature: string,
   ip: string,
   userAgent: string,
+  skipSignature = false,
 ) => {
   const user = await User.findByPk(userId)
   if (!user) throw new Error('유저를 찾을 수 없습니다')
@@ -316,7 +317,10 @@ export const loginStep2 = async (
   const nonce = await getAuthNonce(walletAddress)
 
   // 온체인 서명 검증
+  // + 추가 신뢰 기기면 스킵
+  if (!skipSignature) {
   await contractVerifySignature(walletAddress, nonce, signature)
+  }
 
   // 로그인 기록 저장
   await saveLoginRecord(userId, walletAddress, ip, userAgent)
