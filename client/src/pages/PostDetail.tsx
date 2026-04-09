@@ -1,10 +1,16 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useEffect, useState, useRef } from 'react';
-import { type Post, type Comment } from '../data/mockPosts';
+import { type Post as BasePost, type Comment } from '../data/mockPosts';
+
+// 1. 기존 Post 타입을 확장하여 imageUrl 속성을 강제로 인식시킵니다.
+interface Post extends BasePost {
+  imageUrl?: string;
+}
 
 export default function PostDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // 2. 위에서 정의한 새로운 Post 타입을 사용합니다.
   const [post, setPost] = useState<Post | null>(null);
   const hasIncremented = useRef(false);
 
@@ -19,10 +25,10 @@ export default function PostDetail() {
       
       if (foundPost && !hasIncremented.current) {
         const updatedPosts = posts.map(p => 
-          p.id === foundPost.id ? { ...p, views: p.views + 1 } : p
+          p.id === foundPost.id ? { ...p, views: (p.views || 0) + 1 } : p
         );
         localStorage.setItem('upTick_posts', JSON.stringify(updatedPosts));
-        setPost({ ...foundPost, views: foundPost.views + 1 });
+        setPost({ ...foundPost, views: (foundPost.views || 0) + 1 });
         hasIncremented.current = true;
       } else {
         setPost(foundPost || null);
@@ -35,9 +41,9 @@ export default function PostDetail() {
     const savedPosts = localStorage.getItem('upTick_posts');
     if (savedPosts) {
       const posts: Post[] = JSON.parse(savedPosts);
-      const updatedPosts = posts.map(p => p.id === post.id ? { ...p, likes: p.likes + 1 } : p);
+      const updatedPosts = posts.map(p => p.id === post.id ? { ...p, likes: (p.likes || 0) + 1 } : p);
       localStorage.setItem('upTick_posts', JSON.stringify(updatedPosts));
-      setPost({ ...post, likes: post.likes + 1 });
+      setPost({ ...post, likes: (post.likes || 0) + 1 });
     }
   };
 
@@ -55,7 +61,7 @@ export default function PostDetail() {
       date: now
     };
 
-    const updatedPost = { ...post, comments: [...(post.comments || []), newComment] };
+    const updatedPost: Post = { ...post, comments: [...(post.comments || []), newComment] };
     const savedPosts = JSON.parse(localStorage.getItem('upTick_posts') || '[]');
     localStorage.setItem('upTick_posts', JSON.stringify(savedPosts.map((p: any) => p.id === post.id ? updatedPost : p)));
     
@@ -75,7 +81,6 @@ export default function PostDetail() {
         ← 커뮤니티로 돌아가기
       </button>
       
-      {/* 본문 카드 */}
       <div style={{ backgroundColor: '#fff', borderRadius: '24px', padding: '48px', boxShadow: '0 4px 20px rgba(0,0,0,0.05)', marginBottom: '32px' }}>
         <h1 style={{ fontSize: '28px', marginBottom: '16px', color: '#222' }}>{post.title}</h1>
         <div style={{ color: '#888', fontSize: '14px', marginBottom: '40px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0', paddingBottom: '20px' }}>
@@ -83,7 +88,7 @@ export default function PostDetail() {
           <span>추천수: <strong style={{ color: '#22C55E' }}>{post.likes}</strong> | 조회수: {post.views}</span>
         </div>
 
-        {/* 🖼️ 이미지 출력 영역 (이 부분이 핵심입니다!) */}
+        {/* 🖼️ 이미지 출력 영역 - 이제 빨간 줄이 사라집니다! */}
         {post.imageUrl && (
           <div style={{ marginBottom: '40px', textAlign: 'center', backgroundColor: '#fdfdfd', borderRadius: '16px', padding: '20px', border: '1px solid #f5f5f5' }}>
             <img 
@@ -98,7 +103,6 @@ export default function PostDetail() {
           {post.content}
         </div>
 
-        {/* 추천 버튼 */}
         <div style={{ marginTop: '60px', display: 'flex', justifyContent: 'center' }}>
           <button 
             onClick={handleLike}
@@ -117,7 +121,6 @@ export default function PostDetail() {
         </div>
       </div>
 
-      {/* 댓글 영역 */}
       <div style={{ backgroundColor: '#fff', borderRadius: '24px', padding: '48px', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' }}>
         <h3 style={{ fontSize: '20px', marginBottom: '32px', fontWeight: 'bold' }}>댓글 {post.comments?.length || 0}</h3>
         

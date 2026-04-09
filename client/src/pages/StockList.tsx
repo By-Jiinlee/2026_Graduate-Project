@@ -19,7 +19,7 @@ const StockList: React.FC = () => {
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  
+
   const [selectedMarket, setSelectedMarket] = useState('전체');
   const [favorites, setFavorites] = useState<number[]>([]);
 
@@ -71,12 +71,31 @@ const StockList: React.FC = () => {
     localStorage.setItem('uptick_favs', JSON.stringify(newFavs));
   };
 
+  // 👇 [핵심 수정] ETF 종목을 이름 기반으로 확실하게 걸러냅니다.
   const filteredStocks = useMemo(() => {
-    const marketMap: Record<string, string> = { '코스피': 'KOSPI', '코스닥': 'KOSDAQ' }
+    const marketMap: Record<string, string> = { '코스피': 'KOSPI', '코스닥': 'KOSDAQ' };
+
     return stocks
       .filter(stock => {
+        // 1. 검색어 필터
         const matchSearch = stock.name.toLowerCase().includes(searchTerm.toLowerCase()) || stock.code.includes(searchTerm);
-        const matchMarket = selectedMarket === '전체' || stock.market === marketMap[selectedMarket];
+
+        // 2. 카테고리(시장) 필터
+        let matchMarket = false;
+        if (selectedMarket === '전체') {
+          matchMarket = true; // 전체는 무조건 통과
+        } else if (selectedMarket === 'ETF') {
+          // 이름에 KODEX, TIGER, KBSTAR, ACE, HANARO 등 ETF 브랜드가 들어가면 ETF로 취급!
+          const upperName = stock.name.toUpperCase();
+          matchMarket = upperName.includes('KODEX') || 
+                        upperName.includes('TIGER') || 
+                        upperName.includes('KBSTAR') || 
+                        upperName.includes('ACE') || 
+                        stock.market === 'ETF';
+        } else {
+          matchMarket = stock.market === marketMap[selectedMarket];
+        }
+
         return matchSearch && matchMarket;
       })
       .sort((a, b) => Number(b.volume) - Number(a.volume));
@@ -88,16 +107,14 @@ const StockList: React.FC = () => {
 
   const formatNum = (val: string | number) => Number(val).toLocaleString();
 
-  // 👇 [핵심 수정] 버튼을 누르는 순간에 로컬 스토리지를 훔쳐봅니다!
   const handleManageClick = () => {
-    const isActuallyLoggedIn = localStorage.getItem('loginTime'); // 실시간 체크
+    const isActuallyLoggedIn = localStorage.getItem('loginTime'); 
     
     if (!isActuallyLoggedIn) {
       alert("로그인이 필요한 서비스입니다. 로그인 후 나만의 포트폴리오를 관리해보세요!");
       return;
     }
     
-    // 로그인 되어 있으면 모달 열기
     setIsModalOpen(true);
     setModalSearchTerm(''); 
   };
@@ -123,10 +140,11 @@ const StockList: React.FC = () => {
       {/* 왼쪽 사이드바 */}
       <aside className="w-48 shrink-0">
         <h3 className="text-xl font-bold mb-6 text-gray-800">관심종목</h3>
+        
         <div className="flex p-1 mb-6 bg-gray-200 rounded-xl">
-          <button className="flex-1 py-1.5 text-sm font-bold rounded-lg bg-[#2ecc71] text-white">국내</button>
-          <button className="flex-1 py-1.5 text-sm font-bold text-gray-500">해외</button>
+          <div className="w-full py-1.5 text-center text-sm font-bold rounded-lg bg-[#2ecc71] text-white cursor-default">국내</div>
         </div>
+        
         <ul className="space-y-4 font-semibold text-gray-400">
           {['전체', '코스피', '코스닥', 'ETF'].map((menu) => (
             <li 
@@ -227,21 +245,21 @@ const StockList: React.FC = () => {
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 backdrop-blur-sm">
           <div className="bg-white w-[480px] rounded-[32px] p-8 shadow-2xl relative flex flex-col max-h-[80vh]">
-            <button 
-              onClick={() => setIsModalOpen(false)} 
+            <button
+              onClick={() => setIsModalOpen(false)}
               className="absolute top-6 right-6 text-gray-400 hover:text-gray-800 text-2xl font-bold"
             >
               ×
             </button>
-            
+
             <h2 className="text-2xl font-black mb-2">나의 종목 관리</h2>
             <p className="text-sm text-gray-500 mb-6">마우스로 드래그하여 순서를 변경하거나 종목을 관리하세요.</p>
-            
+
             <div className="flex items-center px-4 py-3 bg-gray-100 rounded-xl mb-6">
               <span className="text-gray-400 mr-2">🔍</span>
-              <input 
-                type="text" 
-                placeholder="추가할 종목 검색..." 
+              <input
+                type="text"
+                placeholder="추가할 종목 검색..."
                 className="bg-transparent outline-none w-full text-sm font-medium"
                 value={modalSearchTerm}
                 onChange={(e) => setModalSearchTerm(e.target.value)}

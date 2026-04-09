@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 .counter {
   font-size: 16px;
   padding: 5px 10px;
@@ -181,12 +185,4 @@
     right: 0;
     border-right-color: var(--border);
   }
-<<<<<<< HEAD
-
-  html {
-  overflow-y: scroll; /* 콘텐츠 양과 상관없이 수직 스크롤바 공간을 항상 유지 */
-}
-
-=======
->>>>>>> 344acb2c6ba53f50cd543eae6d046ae1010cb349
 }

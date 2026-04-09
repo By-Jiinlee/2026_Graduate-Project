@@ -14,9 +14,12 @@ import MyPage from './pages/MyPage'
 import Register from './pages/Register'
 import Login from './pages/Login'
 import StockDetail from './pages/StockDetail'
+// 💡 앞서 만든 설문 페이지 Import (경로가 다르면 수정해주세요)
+import Survey from './pages/Survey' 
 
 const isLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
+// 1. 기존 로그인 체크 가드
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const [count, setCount] = useState(5)
 
@@ -77,12 +80,25 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>
 }
 
+// 2. 💡 추가된 설문 체크 가드 (로그인은 통과했으나 설문을 안 한 사람 튕겨내기)
+const SurveyGuard = ({ children }: { children: React.ReactNode }) => {
+  const userStr = localStorage.getItem('upTick_user')
+  const user = userStr ? JSON.parse(userStr) : {}
+
+  // 설문을 완료하지 않았다면 무조건 /survey 로 강제 이동
+  if (!user.is_survey_completed) {
+    return <Navigate to="/survey" replace />
+  }
+
+  return <>{children}</>
+}
+
 function App() {
   return (
     <BrowserRouter>
       <Navbar />
       <Routes>
-        {/* 비로그인 접근 가능 */}
+        {/* 비로그인 접근 가능 영역 */}
         <Route path="/" element={<LandingPage />} />
         <Route path="/stock" element={<StockList />} />
         <Route path="/stocks" element={<StockList />} />
@@ -91,15 +107,18 @@ function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/login" element={<Login />} />
 
-        {/* 로그인 필요 */}
-        <Route path="/manage" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-        <Route path="/community" element={<ProtectedRoute><Community /></ProtectedRoute>} />
-        <Route path="/community/:id" element={<ProtectedRoute><PostDetail /></ProtectedRoute>} />
-        <Route path="/community/write" element={<ProtectedRoute><WritePost /></ProtectedRoute>} />
-        <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
-        <Route path="/events" element={<ProtectedRoute><Events /></ProtectedRoute>} />
-        <Route path="/mypage" element={<ProtectedRoute><MyPage /></ProtectedRoute>} />
+        {/* 💡 로그인은 필요하지만, 설문 완료 전에도 접근 가능한 유일한 곳 = 설문 페이지 */}
+        <Route path="/survey" element={<ProtectedRoute><Survey /></ProtectedRoute>} />
+
+        {/* 로그인 AND 설문까지 모두 완료해야 접근 가능한 영역들 (이중 감싸기) */}
+        <Route path="/manage" element={<ProtectedRoute><SurveyGuard><Dashboard /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute><SurveyGuard><Dashboard /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/community" element={<ProtectedRoute><SurveyGuard><Community /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/community/:id" element={<ProtectedRoute><SurveyGuard><PostDetail /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/community/write" element={<ProtectedRoute><SurveyGuard><WritePost /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/support" element={<ProtectedRoute><SurveyGuard><Support /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/events" element={<ProtectedRoute><SurveyGuard><Events /></SurveyGuard></ProtectedRoute>} />
+        <Route path="/mypage" element={<ProtectedRoute><SurveyGuard><MyPage /></SurveyGuard></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   )
