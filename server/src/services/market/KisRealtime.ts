@@ -85,9 +85,17 @@ const startFullCrawler = async (io: Server): Promise<void> => {
     crawlerRunning = true
     console.log('[KisCrawler] 전종목 크롤링 모드 시작')
 
+    let lastClosedLog = 0
+
     while (true) {
         if (!isMarketOpen()) {
-            await sleep(30_000)  // 장 외: 30초마다 체크
+            const now = Date.now()
+            if (now - lastClosedLog > 5 * 60_000) {  // 5분마다 한 번만 출력
+                const nowKst = new Date(now + 9 * 3600 * 1000)
+                console.log(`[KisCrawler] 장 외 대기 중... (${nowKst.toISOString().slice(11, 16)} KST) — 개장 시 자동 재개`)
+                lastClosedLog = now
+            }
+            await sleep(30_000)
             continue
         }
 
