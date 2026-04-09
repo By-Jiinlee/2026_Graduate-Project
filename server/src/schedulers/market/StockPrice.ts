@@ -1,38 +1,70 @@
 import cron from 'node-cron';
 import {
     getActiveStocks,
-    getLastSavedDate,
     fetchDailyPrices,
     upsertStockPrices,
-    getToday
+    getToday,
+    isTodayComplete,
+    getAllLastDates,
 } from '../../services/market/StockPrice';
+import { kisUnsupported, markUnsupported } from '../../utils/kisUnsupported'
 
 export const collectStockPrices = async () => {
-    console.log("[StockPrice] 일봉 데이터 수집을 시작합니다.");
-    const stocks = await getActiveStocks();
     const today = getToday();
 
+    // ① 주말이면 즉시 종료
+    const dow = new Date().getDay()
+    if (dow === 0 || dow === 6) {
+        console.log('[StockPrice] 주말 - 수집 스킵');
+        return;
+    }
+
+    // ② 오늘 데이터 전종목 완료 여부 빠른 체크
+    if (await isTodayComplete(today)) {
+        console.log(`[StockPrice] 오늘(${today}) 데이터 이미 완료 - 수집 스킵`);
+        return;
+    }
+
+    console.log('[StockPrice] 일봉 데이터 수집을 시작합니다.');
+
+    // ③ 전종목 마지막 저장일 한번에 조회 (N+1 해소)
+    const [stocks, lastDateMap] = await Promise.all([
+        getActiveStocks(),
+        getAllLastDates(),
+    ]);
+
+    let updated = 0;
+    let skipped = 0;
+
     for (const stock of stocks) {
+        if (kisUnsupported.has(stock.code)) { skipped++; continue; }
+
+        const lastDate = lastDateMap.get(stock.id) ?? '20160101';
+        if (lastDate >= today) { skipped++; continue; }
+
         try {
-            const lastDate = await getLastSavedDate(stock.id) || '20260101';
-
-            if (lastDate >= today) continue;
-
             const prices = await fetchDailyPrices(stock.code, lastDate, today);
 
             if (prices.length > 0) {
                 await upsertStockPrices(stock.id, prices);
                 console.log(`[Success] ${stock.code}: ${prices.length}건 업데이트`);
+                updated++;
             }
 
-            // 한투 초당 호출 제한 방지 (0.2초 대기)
             await new Promise(resolve => setTimeout(resolve, 200));
 
         } catch (error: any) {
-            console.error(`[Error] ${stock.code} 처리 중 오류:`, error.message);
+            const status = error.response?.status
+            if (status === 403 || status === 500) {
+                console.warn(`[StockPrice] ${stock.code}: 미지원 종목 (${status}) - 이후 수집에서 제외`);
+                markUnsupported(stock.code);
+            } else {
+                console.error(`[Error] ${stock.code} 처리 중 오류:`, error.message);
+            }
         }
     }
-    console.log("[StockPrice] 모든 수집 작업 완료.");
+
+    console.log(`[StockPrice] 수집 완료 — 업데이트 ${updated}건 / 스킵 ${skipped}건 / 미지원 ${kisUnsupported.size}건`);
 };
 
 export const startStockPriceScheduler = () => {

@@ -23,35 +23,42 @@ const fetchMinuteCandlesOnce = async (
 ): Promise<any[]> => {
     const token = await getKisAccessToken()
 
-    const res = await axios.get(
-        `${BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice`,
-        {
-            headers: {
-                'content-type': 'application/json',
-                authorization: `Bearer ${token}`,
-                appkey: APP_KEY,
-                appsecret: APP_SECRET,
-                tr_id: 'FHKST03010200',
-            },
-            params: {
-                FID_COND_MRKT_DIV_CODE: 'J',
-                FID_INPUT_ISCD: stockCode,
-                FID_INPUT_HOUR_1: hour,
-                FID_INPUT_DATE_1: date,
-                FID_PW_DATA_INCU_YN: 'N',
-                FID_ETC_CLS_CODE: '',
-            },
-        }
-    )
-
-    return res.data?.output2 ?? []
+    try {
+        const res = await axios.get(
+            `${BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice`,
+            {
+                headers: {
+                    'content-type': 'application/json',
+                    authorization: `Bearer ${token}`,
+                    appkey: APP_KEY,
+                    appsecret: APP_SECRET,
+                    tr_id: 'FHKST03010200',
+                },
+                params: {
+                    FID_COND_MRKT_DIV_CODE: 'J',
+                    FID_INPUT_ISCD: stockCode,
+                    FID_INPUT_HOUR_1: hour,
+                    FID_INPUT_DATE_1: date,
+                    FID_PW_DATA_INCU_YN: 'N',
+                    FID_ETC_CLS_CODE: '',
+                },
+            }
+        )
+        return res.data?.output2 ?? []
+    } catch (err: any) {
+        // 403은 그대로 throw해서 상위 스케줄러가 skip set에 등록하게 함
+        if (err.response?.status === 403) throw err
+        // 그 외 에러는 빈 배열 (일시적 네트워크 오류 등)
+        console.warn(`[MinuteCandle] ${stockCode} API 오류 (${err.response?.status ?? 'unknown'}):`, err.message)
+        return []
+    }
 }
 
 // ─── 하루치 분봉 전체 수집 ────────────────────────────────────
 
-export const fetchDayCandles = async (stockCode: string, date: string): Promise<any[]> => {
+export const fetchDayCandles = async (stockCode: string, date: string, startHour?: string): Promise<any[]> => {
     const allData: any[] = []
-    let currHour = '153000'
+    let currHour = startHour ?? '153000'
 
     while (true) {
         const rows = await fetchMinuteCandlesOnce(stockCode, date, currHour)
@@ -91,6 +98,31 @@ export const getLastSavedDate = async (stockId: number): Promise<string | null> 
         { replacements: { stockId }, type: QueryTypes.SELECT }
     )
     return rows[0]?.last_date ?? null
+}
+
+// 전종목 마지막 분봉 날짜 한번에 조회
+export const getAllLastMinuteDates = async (): Promise<Map<number, string>> => {
+    const rows = await sequelize.query<{ stock_id: number; last_date: string }>(
+        `SELECT stock_id, DATE_FORMAT(MAX(candle_time), '%Y%m%d') AS last_date
+         FROM stock_minute_candles WHERE interval_min = 1
+         GROUP BY stock_id`,
+        { type: QueryTypes.SELECT }
+    )
+    return new Map(rows.map(r => [r.stock_id, r.last_date]))
+}
+
+// 오늘 분봉 이미 수집됐는지 확인 (가장 데이터 많은 날짜가 오늘인지)
+export const isMinuteTodayComplete = async (today: string): Promise<boolean> => {
+    const rows = await sequelize.query<{ best_date: string }>(
+        `SELECT DATE_FORMAT(DATE(candle_time), '%Y%m%d') AS best_date
+         FROM stock_minute_candles
+         WHERE interval_min = 1
+         GROUP BY DATE(candle_time)
+         ORDER BY COUNT(*) DESC, DATE(candle_time) DESC
+         LIMIT 1`,
+        { type: QueryTypes.SELECT }
+    )
+    return rows[0]?.best_date === today
 }
 
 export const upsertMinuteCandles = async (

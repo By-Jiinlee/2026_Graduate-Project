@@ -15,13 +15,14 @@ import fs from 'fs'
 import path from 'path'
 
 // ABI 로드
-const abiPath = path.join(
-  __dirname,
-  '../../../../contracts/abi/AuthVerifier.abi.json',
-)
+const abiPath = path.join(__dirname, '../../../../contracts/abi/AuthVerifier.abi.json')
 const abi = JSON.parse(fs.readFileSync(abiPath, 'utf-8'))
 
+const mockTradeAbiPath = path.join(__dirname, '../../../../contracts/abi/MockTrade.abi.json')
+const mockTradeAbi = JSON.parse(fs.readFileSync(mockTradeAbiPath, 'utf-8'))
+
 const contractAddress = getAddress(process.env.CONTRACT_AUTH_ADDRESS as string)
+const mockTradeAddress = getAddress(process.env.CONTRACT_MOCK_TRADE_ADDRESS as string)
 
 const account = privateKeyToAccount(
   process.env.SERVER_PRIVATE_KEY as `0x${string}`,
@@ -104,11 +105,11 @@ export const buildTradeMessage = (
 ): `0x${string}` => {
   return keccak256(
     concat([
-      toBytes(BigInt(sepolia.id)),
-      toBytes(contractAddress),
-      toBytes(getAddress(walletAddress)),
-      toBytes(nonce),
-      toBytes(amount),
+      toBytes(BigInt(sepolia.id),          { size: 32 }),
+      toBytes(contractAddress,             { size: 20 }),
+      toBytes(getAddress(walletAddress),   { size: 20 }),
+      toBytes(nonce,                       { size: 32 }),
+      toBytes(amount,                      { size: 32 }),
       new TextEncoder().encode(stockCode),
     ]),
   )
@@ -192,4 +193,39 @@ export const signMessage = async (
     message: { raw: message },
   })
   return signature
+}
+
+// ─── MockTrade: 버짓 지급 기록 ────────────────────────────────
+
+export const recordSeed = async (
+  walletAddress: string,
+  amount: bigint,
+): Promise<void> => {
+  const { request } = await publicClient.simulateContract({
+    address: mockTradeAddress,
+    abi: mockTradeAbi,
+    functionName: 'recordSeed',
+    args: [getAddress(walletAddress), amount],
+    account,
+  })
+  await walletClient.writeContract(request)
+}
+
+// ─── MockTrade: 고액 거래 감사 로그 ──────────────────────────
+
+export const logTrade = async (
+  walletAddress: string,
+  stockCode: string,
+  side: 'buy' | 'sell',
+  amount: bigint,
+  tradeNonce: bigint,
+): Promise<void> => {
+  const { request } = await publicClient.simulateContract({
+    address: mockTradeAddress,
+    abi: mockTradeAbi,
+    functionName: 'logTrade',
+    args: [getAddress(walletAddress), stockCode, side, amount, tradeNonce],
+    account,
+  })
+  await walletClient.writeContract(request)
 }

@@ -89,3 +89,6 @@ router.get('/me', isAuthenticated, authController.getMyInfo)
 router.get('/devices', isAuthenticated, authController.listTrustedDevices)
 router.delete('/devices/:deviceId', isAuthenticated, authController.removeTrustedDevice)
 
+// ─── 거래 nonce 조회 (고액 거래 MetaMask 서명용) ──────────────
+router.get('/trade-nonce', isAuthenticated, authController.getTradeNonce)
+

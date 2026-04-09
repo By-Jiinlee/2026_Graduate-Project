@@ -87,7 +87,12 @@ export const fetchDailyPrices = async (stockCode: string, startDate: string, end
                 trading_value: parseFloat(row.acml_tr_pbmn),
             }));
     } catch (error: any) {
-        console.error(`[API Error] ${stockCode}:`, error.message);
+        const status = error.response?.status
+        if (status === 403 || status === 500) {
+            console.warn(`[StockPrice] ${stockCode}: KIS API 미지원/오류 종목 (${status}) - 스킵`);
+        } else {
+            console.error(`[API Error] ${stockCode}:`, error.message);
+        }
         return [];
     }
 };
@@ -122,6 +127,30 @@ export const getActiveStocks = async () => {
         { type: QueryTypes.SELECT }
     );
 };
+
+// 오늘 데이터가 이미 수집됐는지 확인 (가장 데이터 많은 날짜가 오늘인지)
+export const isTodayComplete = async (today: string): Promise<boolean> => {
+    const rows = await sequelize.query<{ best_date: string }>(
+        `SELECT DATE_FORMAT(price_date, '%Y%m%d') AS best_date
+         FROM stock_prices
+         GROUP BY price_date
+         ORDER BY COUNT(*) DESC, price_date DESC
+         LIMIT 1`,
+        { type: QueryTypes.SELECT }
+    )
+    return rows[0]?.best_date === today
+}
+
+// 전종목 마지막 저장일 한번에 조회 (N+1 해소)
+export const getAllLastDates = async (): Promise<Map<number, string>> => {
+    const rows = await sequelize.query<{ stock_id: number; last_date: string }>(
+        `SELECT stock_id, DATE_FORMAT(MAX(price_date), '%Y%m%d') AS last_date
+         FROM stock_prices
+         GROUP BY stock_id`,
+        { type: QueryTypes.SELECT }
+    )
+    return new Map(rows.map(r => [r.stock_id, r.last_date]))
+}
 
 export const getToday = (): string => {
     const d = new Date();

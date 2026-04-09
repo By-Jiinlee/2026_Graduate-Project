@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTradeModeStore } from '../store/tradeModeStore'
+import VirtualPortfolio from '../components/trade/VirtualPortfolio'
 
 export default function MyPage() {
   const navigate = useNavigate()
@@ -12,6 +14,7 @@ export default function MyPage() {
 
   const [withdrawError, setWithdrawError] = useState('')
   const [withdrawLoading, setWithdrawLoading] = useState(false)
+  const { mode } = useTradeModeStore()
 
   // 💡 로컬스토리지에서 유저의 투자 성향 정보를 가져옵니다.
   const userStr = localStorage.getItem('upTick_user')
@@ -84,25 +87,33 @@ export default function MyPage() {
         
         {/* 1. 자산 관리 섹션 */}
         <section className="py-12 border-b border-gray-200">
-          <h2 className="text-2xl font-black mb-10">자산 관리</h2>
-          <div className="flex items-center gap-20">
-            <div className="w-56 h-56 bg-slate-50 rounded-full border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
-              그래프 영역 (데이터 대기 중)
-            </div>
-            <div className="flex-1 flex flex-col gap-6">
-              <div className="h-40 bg-slate-50 rounded-xl border border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
-                보유 주식 목록이 여기에 표시됩니다.
+          <div className="flex items-center gap-3 mb-8">
+            <h2 className="text-2xl font-black">자산 관리</h2>
+            <span style={{
+              fontSize: '12px',
+              fontWeight: '700',
+              padding: '3px 10px',
+              borderRadius: '20px',
+              backgroundColor: mode === 'virtual' ? '#f0fdf4' : '#fff7ed',
+              color: mode === 'virtual' ? '#15803d' : '#c2410c',
+            }}>
+              {mode === 'virtual' ? '📊 모의투자' : '💼 실거래'}
+            </span>
+          </div>
+          {mode === 'virtual' ? (
+            <VirtualPortfolio />
+          ) : (
+            <div className="flex items-center gap-20">
+              <div className="w-56 h-56 bg-slate-50 rounded-full border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
+                그래프 영역 (데이터 대기 중)
+              </div>
+              <div className="flex-1 flex flex-col gap-6">
+                <div className="h-40 bg-slate-50 rounded-xl border border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
+                  보유 주식 목록이 여기에 표시됩니다.
+                </div>
               </div>
             </div>
-          </div>
-        </section>
-
-        {/* 2. 계좌 관리 섹션 */}
-        <section className="py-12 border-b border-gray-200">
-          <h2 className="text-2xl font-black mb-10">계좌 관리</h2>
-          <div className="min-h-[200px] bg-slate-50 rounded-xl border border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
-            연결된 계좌 정보가 여기에 표시됩니다.
-          </div>
+          )}
         </section>
 
         {/* 3. 계정 관리 섹션 */}

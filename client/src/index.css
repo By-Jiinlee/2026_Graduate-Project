@@ -7,6 +7,11 @@ body {
   margin: 0;
 }
 
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.7); }
+}
+
 /* lightweight-charts TradingView 로고 제거 */
 .tv-lightweight-charts a[href*="tradingview"] {
   display: none !important;

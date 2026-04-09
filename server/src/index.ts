@@ -9,6 +9,7 @@ import morgan from 'morgan'
 import { connectDB } from './config/database'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
+import virtualTradeRouter from './routes/trade/virtualTradeRouter'
 
 // 스케줄러
 import stockPriceRouter from './routes/market/StockPrice'
@@ -54,6 +55,7 @@ app.use(cors({
 // 라우터
 app.use('/api/auth', authRouter)
 app.use('/api/test', contractTestRouter)
+app.use('/api/trade/virtual', virtualTradeRouter)
 
 // 스케줄러 라우터
 app.use('/api/market/stock-prices', stockPriceRouter)
@@ -84,5 +86,5 @@ httpServer.listen(PORT, () => {
     //startEcosIndicatorScheduler() //거시경제
 
     // 실시간 시세
-    startKisRealtime(io)
+    startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
 })

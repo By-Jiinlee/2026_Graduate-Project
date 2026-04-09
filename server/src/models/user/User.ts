@@ -22,6 +22,7 @@ interface UserAttributes {
   updated_at?: Date
   deleted_at?: Date
   is_phone_verified: boolean
+  pin_hash?: string | null
 }
 
 interface UserCreationAttributes extends Optional<UserAttributes, 'id'> {}
@@ -39,6 +40,7 @@ class User
   public is_email_verified!: boolean
   public is_locked!: boolean
   public is_phone_verified!: boolean
+  public pin_hash?: string | null
   public status!: 'active' | 'dormant' | 'withdrawn'
   public terms_agreed!: boolean
   public privacy_agreed!: boolean
@@ -76,6 +78,7 @@ User.init(
       defaultValue: 'active',
     },
     is_phone_verified: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
+    pin_hash: { type: DataTypes.STRING(255), allowNull: true },
     terms_agreed: {
       type: DataTypes.TINYINT,
       allowNull: false,

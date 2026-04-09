@@ -1,248 +1,248 @@
-import WebSocket from 'ws'
 import axios from 'axios'
 import { Server, Socket } from 'socket.io'
 import { QueryTypes } from 'sequelize'
 import sequelize from '../../config/database'
+import { getKisAccessToken } from './KisAuth'
 
-const WS_URL = 'wss://openapivts.koreainvestment.com:31000'  // 모의투자 (실전: openapi.koreainvestment.com:21000)
-const CHUNK_SIZE = 40
-const CONNECT_INTERVAL_MS = 5000
-const MAX_RETRIES = 3
-const MAX_CONNECTIONS = 2  // 로그 기준 KIS 허용 한계
+const BASE_URL = 'https://openapi.koreainvestment.com:9443'
+const APP_KEY = process.env.KIS_REAL_APP_KEY!
+const APP_SECRET = process.env.KIS_REAL_APP_SECRET!
 
-// ─── 승인키 자동 갱신 ────────────────────────────────────────
+const POLL_INTERVAL_MS = 2000   // 상세 페이지 온디맨드 폴링 주기
+const CRAWL_DELAY_MS   = 70     // 전종목 크롤링 딜레이 (~14 req/s, 한도 20 대비 여유)
 
-let cachedApprovalKey: string | null = null
-let keyFetchPromise: Promise<string> | null = null
+// 롤백 플래그: .env에서 ENABLE_FULL_CRAWL=false 로 즉시 비활성화 가능
+const FULL_CRAWL_ENABLED = process.env.ENABLE_FULL_CRAWL !== 'false'
 
-const getApprovalKey = (): Promise<string> => {
-    if (cachedApprovalKey) return Promise.resolve(cachedApprovalKey)
-    if (keyFetchPromise) return keyFetchPromise
+// ─── 서버 가격 스냅샷 ────────────────────────────────────────
+export const priceMap = new Map<string, number>()
 
-    keyFetchPromise = (async () => {
-        try {
-            const res = await axios.post(
-                'https://openapivts.koreainvestment.com:29443/oauth2/Approval',
-                {
-                    grant_type: 'client_credentials',
-                    appkey: process.env.APP_KEY,
-                    secretkey: process.env.KIS_MOCK_APP_SECRET,
-                },
-                { headers: { 'content-type': 'application/json' } }
-            )
-            const key = res.data.approval_key
-            if (!key) throw new Error('approval_key 없음')
-            console.log('[KisRealtime] 모의투자 승인키 발급 완료:', key.slice(0, 8) + '...')
-            cachedApprovalKey = key
-            return key
-        } catch (err: any) {
-            console.error('[KisRealtime] 승인키 발급 실패:', err.message)
-            throw err
-        } finally {
-            keyFetchPromise = null
-        }
-    })()
+// ─── 장 시간 여부 (KST 09:00 ~ 15:30, 평일) ─────────────────
 
-    return keyFetchPromise
+const isMarketOpen = (): boolean => {
+    const nowKst = new Date(Date.now() + 9 * 3600 * 1000)
+    const day = nowKst.getUTCDay()
+    if (day === 0 || day === 6) return false
+    const min = nowKst.getUTCHours() * 60 + nowKst.getUTCMinutes()
+    return min >= 9 * 60 && min < 15 * 60 + 30
 }
 
-// ─── H0STCNT0 파싱 ───────────────────────────────────────────
+// ─── KIS REST API 현재가 조회 ─────────────────────────────────
 
-const parseRealtimeData = (raw: string) => {
-    const parts = raw.split('|')
-    if (parts.length < 4) return null
-    if (parts[1] !== 'H0STCNT0') return null
+// 반환값: 정상 데이터 | null(에러) | 'RATE_LIMIT'(EGW00201)
+const fetchCurrentPrice = async (code: string): Promise<
+    { code: string; price: number; change: number; changeRate: number; volume: number; open: number; high: number; low: number } | null | 'RATE_LIMIT'
+> => {
+    try {
+        const token = await getKisAccessToken()
+        const res = await axios.get(
+            `${BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price`,
+            {
+                headers: {
+                    authorization: `Bearer ${token}`,
+                    appkey: APP_KEY,
+                    appsecret: APP_SECRET,
+                    tr_id: 'FHKST01010100',
+                    'content-type': 'application/json',
+                },
+                params: {
+                    FID_COND_MRKT_DIV_CODE: 'J',
+                    FID_INPUT_ISCD: code,
+                },
+            }
+        )
 
-    const f = parts[3].split('^')
-    return {
-        code:       f[0],
-        time:       f[1],
-        price:      Number(f[2]),
-        sign:       f[3],
-        change:     Number(f[4]),
-        changeRate: Number(f[5]),
-        open:       Number(f[7]),
-        high:       Number(f[8]),
-        low:        Number(f[9]),
-        volume:     Number(f[13]),
+        // 한도 초과 에러
+        if (res.data?.msg_cd === 'EGW00201') return 'RATE_LIMIT'
+
+        const o = res.data?.output
+        if (!o || res.data?.rt_cd !== '0') return null
+
+        return {
+            code,
+            price:      Number(o.stck_prpr),
+            change:     Number(o.prdy_vrss),
+            changeRate: Number(o.prdy_ctrt),
+            volume:     Number(o.acml_vol),
+            open:       Number(o.stck_oprc),
+            high:       Number(o.stck_hgpr),
+            low:        Number(o.stck_lwpr),
+        }
+    } catch (err: any) {
+        if (err.response?.data?.msg_cd === 'EGW00201') return 'RATE_LIMIT'
+        return null
     }
 }
 
-// ─── 단일 WebSocket 연결 관리 ─────────────────────────────────
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
-class KisConnection {
-    private ws: WebSocket | null = null
-    private readonly subscribed = new Set<string>()
-    private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-    private failCount = 0
-    private connected = false
+// ─── 전종목 크롤러 ───────────────────────────────────────────
 
-    constructor(
-        private readonly label: string,
-        private readonly io: Server,
-        private readonly onGiveUp?: (codes: string[]) => void,
-    ) {}
+let crawlerRunning = false
 
-    async connect() {
-        if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+const startFullCrawler = async (io: Server): Promise<void> => {
+    if (crawlerRunning) return
+    crawlerRunning = true
+    console.log('[KisCrawler] 전종목 크롤링 모드 시작')
 
-        const key = await getApprovalKey()
-        if (!key) {
-            console.error(`[KisRealtime] ${this.label} 승인키 없음 — 30초 후 재시도`)
-            this.reconnectTimer = setTimeout(() => this.connect(), 30000)
-            return
+    while (true) {
+        if (!isMarketOpen()) {
+            await sleep(30_000)  // 장 외: 30초마다 체크
+            continue
         }
 
-        this.ws = new WebSocket(WS_URL)
+        let stocks: { id: number; code: string }[]
+        try {
+            stocks = await sequelize.query<{ id: number; code: string }>(
+                `SELECT id, code FROM stocks WHERE is_active = 1 AND market IN ('KOSPI','KOSDAQ')`,
+                { type: QueryTypes.SELECT }
+            )
+        } catch {
+            await sleep(10_000)
+            continue
+        }
 
-        this.ws.on('open', () => {
-            this.failCount = 0
-            this.connected = true
-            console.log(`[KisRealtime] ${this.label} 연결됨`)
-            this.subscribed.forEach(code => this.sendMsg(code, '1', key))
-        })
+        const cycleStart = Date.now()
+        console.log(`\n[KisCrawler] ━━━ 사이클 시작 ━━━ ${stocks.length}개 종목 / ${new Date().toLocaleTimeString('ko-KR')}`)
 
-        this.ws.on('message', (data: Buffer) => {
-            const raw = data.toString()
-            if (raw.includes('PINGPONG')) { this.ws?.pong(); return }
-            if (raw.startsWith('{')) return
-            const parsed = parseRealtimeData(raw)
-            if (parsed) this.io.emit('stock:price', parsed)
-        })
+        let updated = 0
+        let changed = 0
+        let rateLimitHits = 0
 
-        this.ws.on('error', (err) => {
-            console.error(`[KisRealtime] ${this.label} 오류:`, err.message)
-        })
-
-        this.ws.on('close', () => {
-            if (!this.connected) this.failCount++
-
-            if (this.failCount >= MAX_RETRIES) {
-                console.warn(`[KisRealtime] ${this.label} ${MAX_RETRIES}회 실패 — 포기`)
-                this.onGiveUp?.([...this.subscribed])
-                return
+        for (let i = 0; i < stocks.length; i++) {
+            const stock = stocks[i]
+            if (!isMarketOpen()) {
+                console.log(`[KisCrawler] 장 마감 감지 — ${i}번째에서 중단`)
+                break
             }
 
-            this.connected = false
-            console.log(`[KisRealtime] ${this.label} 종료 — 5초 후 재연결 (${this.failCount}/${MAX_RETRIES})`)
-            this.reconnectTimer = setTimeout(() => this.connect(), 5000)
-        })
-    }
+            const prevPrice = priceMap.get(stock.code)
+            const result = await fetchCurrentPrice(stock.code)
 
-    subscribe(code: string) {
-        if (this.subscribed.has(code)) return
-        this.subscribed.add(code)
-        if (this.ws?.readyState === WebSocket.OPEN) {
-            getApprovalKey().then(key => this.sendMsg(code, '1', key))
+            if (result === 'RATE_LIMIT') {
+                rateLimitHits++
+                if (rateLimitHits <= 3) {
+                    console.warn(`[KisCrawler] ⚠ Rate limit (EGW00201) ${i + 1}번째 종목 — 2초 대기`)
+                }
+                await sleep(2000)
+                continue
+            }
+
+            if (result) {
+                if (prevPrice !== result.price) changed++
+                priceMap.set(result.code, result.price)
+                io.emit('stock:price', result)
+                updated++
+                rateLimitHits = 0
+            }
+
+            // 처음 5개: 즉시 확인용 로그
+            if (i < 5) {
+                const status = !result ? '✗ null' : typeof result === 'string' ? '⚠ rate limit' : `✓ ${result.price}원`
+                console.log(`[KisCrawler] [${i + 1}/5 초기확인] ${stock.code} → ${status}`)
+            }
+
+            // 이후 300개마다 중간 진행 로그
+            if (i >= 5 && (i + 1) % 300 === 0) {
+                const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0)
+                const sample = [...priceMap.entries()].slice(0, 3).map(([c, p]) => `${c}:${p}`).join(' | ')
+                console.log(`[KisCrawler] 진행 ${i + 1}/${stocks.length} (${elapsed}s) | 업데이트 ${updated}개 | 샘플: ${sample}`)
+            }
+
+            await sleep(CRAWL_DELAY_MS)
         }
-    }
 
-    unsubscribe(code: string) {
-        if (!this.subscribed.has(code)) return
-        this.subscribed.delete(code)
-        if (this.ws?.readyState === WebSocket.OPEN) {
-            getApprovalKey().then(key => this.sendMsg(code, '2', key))
-        }
-    }
-
-    has(code: string) { return this.subscribed.has(code) }
-    size()            { return this.subscribed.size }
-
-    private sendMsg(code: string, trType: '1' | '2', key: string) {
-        this.ws?.send(JSON.stringify({
-            header: {
-                approval_key: key,
-                custtype: 'P',
-                tr_type: trType,
-                'content-type': 'utf-8',
-            },
-            body: { input: { tr_id: 'H0STCNT0', tr_key: code } },
-        }))
+        const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1)
+        const sample = [...priceMap.entries()].slice(0, 5).map(([c, p]) => `${c}=${p}`).join(' | ')
+        console.log(`\n========================================`)
+        console.log(`✅ [KisCrawler] 전종목 크롤링 완료`)
+        console.log(`   소요시간: ${elapsed}s | 업데이트: ${updated}개 | 가격변동: ${changed}개 | RateLimit: ${rateLimitHits}회`)
+        console.log(`   샘플: ${sample || '없음'}`)
+        console.log(`========================================\n`)
     }
 }
 
-// ─── 동적 구독 ───────────────────────────────────────────────
+// ─── 온디맨드 폴링 (상세 페이지용) ──────────────────────────
 
-let dynamicConn: KisConnection
-const dynamicRefCount = new Map<string, number>()
-const allSubscribed = new Set<string>()
+const refCount   = new Map<string, number>()
+const pollTimers = new Map<string, ReturnType<typeof setInterval>>()
 
-const decrementRef = (code: string) => {
-    const count = dynamicRefCount.get(code) ?? 0
+const startPolling = (code: string, io: Server) => {
+    if (pollTimers.has(code)) return
+
+    const timer = setInterval(async () => {
+        const result = await fetchCurrentPrice(code)
+        if (result && result !== 'RATE_LIMIT') {
+            priceMap.set(result.code, result.price)
+            io.emit('stock:price', result)
+        }
+    }, POLL_INTERVAL_MS)
+
+    pollTimers.set(code, timer)
+    console.log(`[KisRealtime] 온디맨드 폴링 시작: ${code}`)
+}
+
+const stopPolling = (code: string) => {
+    const timer = pollTimers.get(code)
+    if (!timer) return
+    clearInterval(timer)
+    pollTimers.delete(code)
+    console.log(`[KisRealtime] 온디맨드 폴링 중지: ${code}`)
+}
+
+const decrement = (code: string) => {
+    const count = refCount.get(code) ?? 0
     if (count <= 1) {
-        dynamicRefCount.delete(code)
-        dynamicConn.unsubscribe(code)
-        console.log(`[KisRealtime] 동적 구독 해제: ${code}`)
+        refCount.delete(code)
+        stopPolling(code)
     } else {
-        dynamicRefCount.set(code, count - 1)
+        refCount.set(code, count - 1)
     }
 }
+
+// ─── 상태 진단 ───────────────────────────────────────────────
+
+export const getRealtimeStatus = () => ({
+    mode: FULL_CRAWL_ENABLED ? 'full-crawl' : 'on-demand',
+    crawlerRunning,
+    isMarketOpen: isMarketOpen(),
+    priceMapSize: priceMap.size,
+    onDemandPolling: [...pollTimers.keys()],
+    samplePrices: [...priceMap.entries()].slice(0, 10).map(([code, price]) => ({ code, price })),
+})
 
 // ─── 진입점 ──────────────────────────────────────────────────
 
 export const startKisRealtime = async (io: Server): Promise<void> => {
-    // 승인키 확인
-    await getApprovalKey()
-
-    // 거래량 상위 종목 (MAX_CONNECTIONS × CHUNK_SIZE 개)
-    const limit = MAX_CONNECTIONS * CHUNK_SIZE
-    const topStocks = await sequelize.query<{ code: string }>(
-        `SELECT s.code
-         FROM stocks s
-         JOIN stock_prices sp ON s.id = sp.stock_id
-         WHERE sp.price_date = (SELECT MAX(price_date) FROM stock_prices)
-           AND s.is_active = 1
-           AND s.market IN ('KOSPI', 'KOSDAQ')
-         ORDER BY sp.volume DESC
-         LIMIT ${limit}`,
-        { type: QueryTypes.SELECT }
-    )
-
-    console.log(`[KisRealtime] 거래량 상위 ${topStocks.length}개 종목 → ${MAX_CONNECTIONS}개 연결 (${CONNECT_INTERVAL_MS / 1000}초 간격)`)
-
-    for (let i = 0; i < topStocks.length; i += CHUNK_SIZE) {
-        const chunk = topStocks.slice(i, i + CHUNK_SIZE)
-        const chunkIndex = Math.floor(i / CHUNK_SIZE)
-
-        setTimeout(() => {
-            const conn = new KisConnection(`#${chunkIndex}`, io, (failedCodes) => {
-                failedCodes.forEach(code => allSubscribed.delete(code))
-                console.log(`[KisRealtime] #${chunkIndex} 포기 — ${failedCodes.length}개 동적 구독으로 전환`)
-            })
-            conn.connect()
-            chunk.forEach(s => {
-                conn.subscribe(s.code)
-                allSubscribed.add(s.code)
-            })
-        }, chunkIndex * CONNECT_INTERVAL_MS)
+    if (FULL_CRAWL_ENABLED) {
+        console.log('[KisRealtime] 전종목 크롤링 모드 (ENABLE_FULL_CRAWL=true)')
+        startFullCrawler(io).catch(err =>
+            console.error('[KisCrawler] 크롤러 오류:', err.message)
+        )
+    } else {
+        console.log('[KisRealtime] 온디맨드 폴링 모드 (ENABLE_FULL_CRAWL=false)')
     }
 
-    // 동적 구독 연결 (상세 페이지 진입 종목 + 고정 구독 밖의 종목)
-    dynamicConn = new KisConnection('DYNAMIC', io)
-    dynamicConn.connect()
-
+    // 상세 페이지 온디맨드 폴링은 항상 유지
     io.on('connection', (socket: Socket) => {
         const socketSubs = new Set<string>()
 
         socket.on('subscribe:stock', (code: string) => {
-            if (allSubscribed.has(code) || socketSubs.has(code)) return
+            if (socketSubs.has(code)) return
             socketSubs.add(code)
-            const count = dynamicRefCount.get(code) ?? 0
-            dynamicRefCount.set(code, count + 1)
-            if (count === 0) {
-                dynamicConn.subscribe(code)
-                console.log(`[KisRealtime] 동적 구독 추가: ${code}`)
-            }
+            const count = refCount.get(code) ?? 0
+            refCount.set(code, count + 1)
+            if (count === 0) startPolling(code, io)
         })
 
         socket.on('unsubscribe:stock', (code: string) => {
             if (!socketSubs.has(code)) return
             socketSubs.delete(code)
-            decrementRef(code)
+            decrement(code)
         })
 
         socket.on('disconnect', () => {
-            socketSubs.forEach(code => decrementRef(code))
+            socketSubs.forEach(code => decrement(code))
         })
     })
 }

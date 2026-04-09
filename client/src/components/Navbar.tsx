@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
+import { useTradeModeStore } from '../store/tradeModeStore'
 
 const checkLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
@@ -13,6 +14,7 @@ const getSessionRemaining = () => {
 export default function Navbar() {
   const navigate = useNavigate()
   const [loggedIn, setLoggedIn] = useState(checkLoggedIn())
+  const { mode, setMode, reset: resetMode } = useTradeModeStore()
   const [remaining, setRemaining] = useState(getSessionRemaining())
   const [showWarning, setShowWarning] = useState(false)
 
@@ -32,6 +34,7 @@ export default function Navbar() {
       if (r <= 0) {
         setLoggedIn(false)
         localStorage.removeItem('loginTime')
+        resetMode()
         document.cookie = 'accessToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
         document.cookie = 'refreshToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
         document.cookie = 'isLoggedIn=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
@@ -51,6 +54,7 @@ export default function Navbar() {
     document.cookie = 'refreshToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     document.cookie = 'isLoggedIn=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
     localStorage.removeItem('loginTime')
+    resetMode()
     setLoggedIn(false)
     navigate('/')
   }
@@ -142,6 +146,38 @@ export default function Navbar() {
             <Link to="/" className="text-xl font-black text-black tracking-tight">
               UpTick
             </Link>
+            {loggedIn && (
+              <button
+                onClick={() => setMode(mode === 'real' ? 'virtual' : 'real')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  marginLeft: '8px',
+                  padding: '3px 10px 3px 7px',
+                  borderRadius: '999px',
+                  border: `1px solid ${mode === 'real' ? '#fed7aa' : '#bbf7d0'}`,
+                  backgroundColor: mode === 'real' ? '#fff7ed' : '#f0fdf4',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  color: mode === 'real' ? '#c2410c' : '#15803d',
+                  letterSpacing: '0.03em',
+                  transition: 'all 0.25s ease',
+                  userSelect: 'none',
+                }}
+              >
+                <span style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: mode === 'real' ? '#f97316' : '#22C55E',
+                  animation: 'pulse-dot 1.8s ease-in-out infinite',
+                  flexShrink: 0,
+                }} />
+                {mode === 'real' ? '실거래' : '모의투자'}
+              </button>
+            )}
           </div>
 
           <div className="flex items-center space-x-20">

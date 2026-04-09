@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import { formatStockName } from '../utils/formatStockName';
 
 interface StockData {
   id: number;
@@ -12,10 +13,14 @@ interface StockData {
   changeRate: string | number;
   volume: string | number;
   market?: string;
+  type?: string; // KOSPI | KOSDAQ | ETF
 }
+
+const isLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
 const StockList: React.FC = () => {
   const navigate = useNavigate();
+  const loggedIn = isLoggedIn()
   const [stocks, setStocks] = useState<StockData[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -74,7 +79,6 @@ const StockList: React.FC = () => {
   // 👇 [핵심 수정] ETF 종목을 이름 기반으로 확실하게 걸러냅니다.
   const filteredStocks = useMemo(() => {
     const marketMap: Record<string, string> = { '코스피': 'KOSPI', '코스닥': 'KOSDAQ' };
-
     return stocks
       .filter(stock => {
         // 1. 검색어 필터
@@ -83,14 +87,13 @@ const StockList: React.FC = () => {
         // 2. 카테고리(시장) 필터
         let matchMarket = false;
         if (selectedMarket === '전체') {
-          matchMarket = true; // 전체는 무조건 통과
+          matchMarket = true;
         } else if (selectedMarket === 'ETF') {
-          // 이름에 KODEX, TIGER, KBSTAR, ACE, HANARO 등 ETF 브랜드가 들어가면 ETF로 취급!
           const upperName = stock.name.toUpperCase();
-          matchMarket = upperName.includes('KODEX') || 
-                        upperName.includes('TIGER') || 
-                        upperName.includes('KBSTAR') || 
-                        upperName.includes('ACE') || 
+          matchMarket = upperName.includes('KODEX') ||
+                        upperName.includes('TIGER') ||
+                        upperName.includes('KBSTAR') ||
+                        upperName.includes('ACE') ||
                         stock.market === 'ETF';
         } else {
           matchMarket = stock.market === marketMap[selectedMarket];
@@ -146,7 +149,7 @@ const StockList: React.FC = () => {
         </div>
         
         <ul className="space-y-4 font-semibold text-gray-400">
-          {['전체', '코스피', '코스닥', 'ETF'].map((menu) => (
+          {['전체', '코스피', '코스닥', 'ETF', '펀드'].map((menu) => (
             <li 
               key={menu}
               onClick={() => setSelectedMarket(menu)}
@@ -161,7 +164,7 @@ const StockList: React.FC = () => {
       {/* 메인 콘텐츠 */}
       <main className="flex-1 bg-white p-8 rounded-[32px] shadow-sm border border-gray-100">
         <div className="flex justify-between items-center mb-8">
-          <h2 className="text-2xl font-black">국내종목리스트</h2>
+          <h2 className="text-2xl font-black">국내 종목 리스트</h2>
           <div className="flex items-center px-5 py-2.5 bg-gray-100 rounded-full">
             <input 
               type="text" 
@@ -193,13 +196,15 @@ const StockList: React.FC = () => {
                 className="hover:bg-gray-50 transition-colors cursor-pointer"
               >
                 <td className="py-5 font-bold flex items-center gap-2">
-                  <span 
-                    onClick={(e) => toggleFavorite(e, stock.id)}
-                    className={`text-xl ${favorites.includes(stock.id) ? 'text-yellow-400' : 'text-gray-200'} hover:scale-125 transition-transform`}
-                  >
-                    ★
-                  </span>
-                  {stock.name}
+                  {loggedIn && (
+                    <span
+                      onClick={(e) => toggleFavorite(e, stock.id)}
+                      className={`text-xl ${favorites.includes(stock.id) ? 'text-yellow-400' : 'text-gray-200'} hover:scale-125 transition-transform`}
+                    >
+                      ★
+                    </span>
+                  )}
+                  {formatStockName(stock.name)}
                 </td>
                 <td className="py-5 text-gray-300 text-xs">{stock.code}</td>
                 <td className="py-5 text-right font-black">₩{formatNum(stock.price)}</td>
@@ -216,14 +221,14 @@ const StockList: React.FC = () => {
         </table>
       </main>
 
-      {/* 오른쪽 사이드바 */}
-      <aside className="w-64 shrink-0">
+      {/* 오른쪽 사이드바: 즐겨찾기 실시간 반영 */}
+      {loggedIn && <aside className="w-64 shrink-0">
         <div className="p-7 bg-white rounded-3xl border border-gray-100 shadow-sm sticky top-8">
           <h3 className="text-sm font-extrabold mb-6 text-gray-800 uppercase tracking-widest">즐겨찾는 나의 종목</h3>
           <div className="space-y-5">
             {favoriteStocks.length > 0 ? favoriteStocks.map(s => (
               <div key={s.id} onClick={() => navigate(`/stock/${s.id}`)} className="flex justify-between items-center text-sm cursor-pointer hover:bg-gray-50 p-1 rounded-lg">
-                <span className="font-bold text-gray-700">{s.name}</span>
+                <span className="font-bold text-gray-700">{formatStockName(s.name)}</span>
                 <span className={`font-bold ${Number(s.changeRate) > 0 ? 'text-red-500' : 'text-blue-500'}`}>
                   {Number(s.changeRate) > 0 ? '+' : ''}{Number(s.changeRate).toFixed(2)}%
                 </span>
@@ -239,7 +244,7 @@ const StockList: React.FC = () => {
              종목 관리
           </button>
         </div>
-      </aside>
+      </aside>}
 
       {/* 종목 관리 모달 */}
       {isModalOpen && (
@@ -282,7 +287,7 @@ const StockList: React.FC = () => {
               ) : (
                 favoriteStocks.length > 0 ? (
                   favoriteStocks.map((stock, index) => (
-                    <div 
+                    <div
                       key={`fav-${stock.id}`}
                       draggable
                       onDragStart={(e) => { setDraggedIdx(index); e.dataTransfer.effectAllowed = 'move'; }}
@@ -294,8 +299,8 @@ const StockList: React.FC = () => {
                         <span className="text-gray-300 cursor-grab">⣿</span>
                         <span className="font-bold text-gray-800">{stock.name}</span>
                       </div>
-                      <button 
-                        onClick={(e) => toggleFavorite(e, stock.id)} 
+                      <button
+                        onClick={(e) => toggleFavorite(e, stock.id)}
                         className="text-gray-400 hover:text-red-500 text-sm font-bold bg-gray-100 hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors"
                       >
                         삭제
@@ -309,8 +314,8 @@ const StockList: React.FC = () => {
                 )
               )}
             </div>
-            
-            <button 
+
+            <button
               onClick={() => setIsModalOpen(false)}
               className="w-full mt-6 py-4 bg-gray-900 text-white font-bold rounded-2xl hover:bg-gray-800 transition-colors"
             >

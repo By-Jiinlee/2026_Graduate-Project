@@ -9,6 +9,8 @@ import {
   revokeTrustedDevice,
   DEVICE_COOKIE_NAME,
 } from '../../services/auth/trustedDeviceService'
+import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
+import Wallet from '../../models/user/Wallet'
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 
@@ -272,7 +274,14 @@ export const refreshToken = async (req: Request, res: Response) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 1000 * 60 * 60,
+      maxAge: 1000 * 60 * 10,
+    })
+
+    res.cookie('isLoggedIn', 'true', {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 1000 * 60 * 10,
     })
 
     return res.status(200).json({ message: '토큰이 갱신되었습니다' })
@@ -318,7 +327,6 @@ export const getMyInfo = async (req: Request, res: Response) => {
 }
 
 // ─── 신뢰 기기 관리 (마이페이지) ─────────────────────────────
-// ↓ 추가: 신규 함수
 
 export const listTrustedDevices = async (req: Request, res: Response) => {
   try {
@@ -341,5 +349,20 @@ export const removeTrustedDevice = async (req: Request, res: Response) => {
     return res.status(200).json({ message: '기기 신뢰가 해제되었습니다' })
   } catch (error: any) {
     return res.status(400).json({ message: error.message })
+  }
+}
+
+// ─── 거래 nonce 조회 (고액 거래 MetaMask 서명용) ──────────────
+
+export const getTradeNonce = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const wallet = await Wallet.findOne({ where: { user_id: userId } })
+    if (!wallet) return res.status(404).json({ message: '지갑이 없습니다' })
+
+    const nonce = await fetchTradeNonce(wallet.address)
+    res.json({ nonce: nonce.toString() })
+  } catch (error: any) {
+    res.status(500).json({ message: error.message })
   }
 }
