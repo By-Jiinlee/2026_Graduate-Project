@@ -357,8 +357,10 @@ export const getPortfolio = async (userId: number) => {
     name: string
     quantity: number
     avg_price: number
+    db_close: number
   }>(
-    `SELECT vh.stock_id, s.code, s.name, vh.quantity, vh.avg_price
+    `SELECT vh.stock_id, s.code, s.name, vh.quantity, vh.avg_price,
+            (SELECT sp.close FROM stock_prices sp WHERE sp.stock_id = vh.stock_id ORDER BY sp.price_date DESC LIMIT 1) AS db_close
      FROM virtual_holdings vh
      JOIN stocks s ON s.id = vh.stock_id
      WHERE vh.user_id = :userId`,
@@ -366,9 +368,10 @@ export const getPortfolio = async (userId: number) => {
   )
 
   const holdingsWithPnl = holdings.map(h => {
-    const currentPrice = priceMap.get(h.code) ?? h.avg_price
+    // priceMap(실시간) → DB 최근 종가 → 매매가 순 폴백
+    const currentPrice = priceMap.get(h.code) ?? Number(h.db_close) ?? Number(h.avg_price)
     const evalAmount = currentPrice * h.quantity
-    const costAmount = h.avg_price * h.quantity
+    const costAmount = Number(h.avg_price) * h.quantity
     const pnl = evalAmount - costAmount
     const pnlRate = costAmount > 0 ? (pnl / costAmount) * 100 : 0
     return { ...h, currentPrice, evalAmount, pnl, pnlRate }

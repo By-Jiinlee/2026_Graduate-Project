@@ -492,3 +492,95 @@ export const verifyPhoneCode = async (userId: number, phone: string, code: strin
     { where: { id: userId } },
   )
 }
+
+// ─── 닉네임 중복 확인 ────────────────────────────────────────
+export const checkNicknameAvailable = async (nickname: string, excludeUserId?: number): Promise<void> => {
+  if (!/^[a-zA-Z0-9가-힣_]{2,20}$/.test(nickname)) {
+    throw new Error('닉네임은 2~20자, 한글/영문/숫자/밑줄(_)만 사용 가능합니다')
+  }
+  const where: any = { nickname }
+  const existing = await User.findOne({ where })
+  if (existing && existing.id !== excludeUserId) {
+    throw new Error('이미 사용 중인 닉네임입니다')
+  }
+}
+
+// ─── 마이페이지 이메일 변경 ──────────────────────────────────
+
+export const sendEmailChangeCode = async (userId: number, newEmail: string): Promise<void> => {
+  // 1달 변경 제한 체크
+  const user = await User.findByPk(userId)
+  if (!user) throw new Error('사용자를 찾을 수 없습니다')
+
+  if (user.email_changed_at) {
+    const daysSince = (Date.now() - new Date(user.email_changed_at).getTime()) / (1000 * 60 * 60 * 24)
+    if (daysSince < 30) {
+      const daysLeft = Math.ceil(30 - daysSince)
+      throw new Error(`이메일은 변경 후 30일이 지나야 다시 변경할 수 있습니다. (${daysLeft}일 남음)`)
+    }
+  }
+
+  // 새 이메일 형식 확인
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) throw new Error('올바른 이메일 형식이 아닙니다')
+
+  // 이미 사용 중인 이메일인지 확인 (본인 제외)
+  const existing = await User.findOne({ where: { email: newEmail, status: { [Op.ne]: 'withdrawn' } } })
+  if (existing && existing.id !== userId) throw new Error('이미 사용 중인 이메일입니다')
+
+  // 기존 미사용 코드 무효화
+  await EmailVerification.update({ is_used: true }, { where: { email: newEmail, is_used: false } })
+
+  // 일 5회 제한
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+  const sendCount = await EmailVerification.count({ where: { email: newEmail, created_at: { [Op.gte]: todayStart } } })
+  if (sendCount >= 5) throw new Error('일일 인증 요청 한도를 초과했습니다')
+
+  // 1분 쿨타임
+  const lastSent = await EmailVerification.findOne({ where: { email: newEmail }, order: [['created_at', 'DESC']] })
+  if (lastSent) {
+    const diff = Date.now() - new Date(lastSent.created_at!).getTime()
+    if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
+  }
+
+  const code = crypto.randomInt(100000, 999999).toString()
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
+  await EmailVerification.create({ email: newEmail, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  await sendVerificationEmail(newEmail, code)
+}
+
+export const verifyEmailChange = async (userId: number, newEmail: string, code: string): Promise<void> => {
+  // 1달 제한 재확인 (코드 발송~검증 사이 우회 방지)
+  const user = await User.findByPk(userId)
+  if (!user) throw new Error('사용자를 찾을 수 없습니다')
+
+  if (user.email_changed_at) {
+    const daysSince = (Date.now() - new Date(user.email_changed_at).getTime()) / (1000 * 60 * 60 * 24)
+    if (daysSince < 30) {
+      const daysLeft = Math.ceil(30 - daysSince)
+      throw new Error(`이메일은 변경 후 30일이 지나야 다시 변경할 수 있습니다. (${daysLeft}일 남음)`)
+    }
+  }
+
+  // 이메일 중복 재확인
+  const existing = await User.findOne({ where: { email: newEmail, status: { [Op.ne]: 'withdrawn' } } })
+  if (existing && existing.id !== userId) throw new Error('이미 사용 중인 이메일입니다')
+
+  // 인증코드 검증
+  const record = await EmailVerification.findOne({ where: { email: newEmail, is_used: false }, order: [['created_at', 'DESC']] })
+  if (!record) throw new Error('인증코드가 존재하지 않습니다')
+  if (new Date() > record.expires_at) throw new Error('인증코드가 만료되었습니다')
+  if (record.fail_count >= 5) {
+    await record.update({ is_used: true })
+    throw new Error('인증 시도 횟수를 초과했습니다. 코드를 재발급 받으세요')
+  }
+  if (record.code !== code) {
+    await record.increment('fail_count')
+    const remaining = 4 - record.fail_count
+    throw new Error(`인증코드가 올바르지 않습니다. 남은 시도: ${remaining}회`)
+  }
+
+  await record.update({ is_used: true })
+
+  // 이메일 업데이트 + 변경일 기록
+  await User.update({ email: newEmail, email_changed_at: new Date() }, { where: { id: userId } })
+}

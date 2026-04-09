@@ -11,6 +11,7 @@ import {
 } from '../../services/auth/trustedDeviceService'
 import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
 import Wallet from '../../models/user/Wallet'
+import User from '../../models/user/User'
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 
@@ -316,11 +317,97 @@ export const verifyPhoneCode = async (req: Request, res: Response) => {
 export const getMyInfo = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const User = require('../../models/user/User').default
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'email', 'name', 'phone', 'is_phone_verified', 'role', 'status', 'created_at'],
+      attributes: ['id', 'email', 'name', 'nickname', 'phone', 'is_phone_verified', 'role', 'status', 'created_at', 'email_changed_at'],
     })
     return res.status(200).json(user)
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message })
+  }
+}
+
+export const updateProfile = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { nickname } = req.body
+    await authService.checkNicknameAvailable(nickname, userId)
+    await User.update({ nickname: nickname.trim() }, { where: { id: userId } })
+    return res.status(200).json({ message: '닉네임이 업데이트되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+export const checkNickname = async (req: Request, res: Response) => {
+  try {
+    const { nickname } = req.query as { nickname: string }
+    const userId = (req as any).user.id
+    await authService.checkNicknameAvailable(nickname, userId)
+    return res.status(200).json({ available: true, message: '사용 가능한 닉네임입니다' })
+  } catch (error: any) {
+    return res.status(400).json({ available: false, message: error.message })
+  }
+}
+
+export const sendEmailChangeCode = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { email } = req.body
+    if (!email) return res.status(400).json({ message: '이메일을 입력해주세요' })
+    await authService.sendEmailChangeCode(userId, email)
+    return res.status(200).json({ message: '인증코드가 발송되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+export const changeEmail = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { email, code } = req.body
+    if (!email || !code) return res.status(400).json({ message: '이메일과 인증코드를 입력해주세요' })
+    await authService.verifyEmailChange(userId, email, code)
+    return res.status(200).json({ message: '이메일이 변경되었습니다' })
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message })
+  }
+}
+
+const PW_REGEX = /^(?=.*[a-zA-Z])(?=.*[0-9])(?=.*[!@#$%^&*])[a-zA-Z0-9!@#$%^&*]{8,}$/
+
+export const changePassword = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { currentPassword, newPassword } = req.body
+    if (!currentPassword || !newPassword) return res.status(400).json({ message: '비밀번호를 입력해주세요' })
+    if (!PW_REGEX.test(newPassword)) return res.status(400).json({ message: '새 비밀번호는 영문, 숫자, 특수문자(!@#$%^&*)를 각 1개 이상 포함한 8자 이상이어야 합니다' })
+
+    const user = await User.findByPk(userId)
+    if (!user) return res.status(404).json({ message: '사용자를 찾을 수 없습니다' })
+
+    const bcrypt = require('bcryptjs')
+    const ok = await bcrypt.compare(currentPassword, user.password_hash)
+    if (!ok) return res.status(400).json({ message: '현재 비밀번호가 올바르지 않습니다' })
+
+    const newHash = await bcrypt.hash(newPassword, 12)
+    await User.update({ password_hash: newHash }, { where: { id: userId } })
+    return res.status(200).json({ message: '비밀번호가 변경되었습니다' })
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message })
+  }
+}
+
+export const getLoginRecords = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const LoginRecord = require('../../models/auth/LoginRecord').default
+    const records = await LoginRecord.findAll({
+      where: { user_id: userId },
+      order: [['logged_at', 'DESC']],
+      limit: 10,
+      attributes: ['id', 'ip_address', 'country', 'region', 'city', 'user_agent', 'logged_at'],
+    })
+    return res.status(200).json({ records })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })
   }
@@ -331,8 +418,15 @@ export const getMyInfo = async (req: Request, res: Response) => {
 export const listTrustedDevices = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
+    const userAgent = req.headers['user-agent'] ?? 'unknown'
+    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    const rawDeviceToken = req.cookies[DEVICE_COOKIE_NAME]
+    let isTrustedDevice = false
+    if (rawDeviceToken) {
+      isTrustedDevice = await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip)
+    }
     const devices = await getTrustedDevices(userId)
-    return res.status(200).json({ devices })
+    return res.status(200).json({ devices, isTrustedDevice })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })
   }
@@ -349,6 +443,27 @@ export const removeTrustedDevice = async (req: Request, res: Response) => {
     return res.status(200).json({ message: '기기 신뢰가 해제되었습니다' })
   } catch (error: any) {
     return res.status(400).json({ message: error.message })
+  }
+}
+
+export const registerDevice = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const userAgent = req.headers['user-agent'] ?? 'unknown'
+    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+
+    // 기존 기기 전체 해제 후 현재 기기 신규 등록
+    await revokeAllTrustedDevices(userId)
+    const rawDeviceToken = await registerTrustedDevice(userId, userAgent, ip)
+    res.cookie(DEVICE_COOKIE_NAME, rawDeviceToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 1000 * 60 * 60 * 24 * 30,
+    })
+    return res.status(200).json({ message: '기기가 신뢰 기기로 등록되었습니다' })
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message })
   }
 }
 

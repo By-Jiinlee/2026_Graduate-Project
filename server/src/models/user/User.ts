@@ -6,6 +6,7 @@ interface UserAttributes {
   email: string
   password_hash: string
   name: string
+  nickname?: string | null
   phone: string | null
   role: 'user' | 'admin'
   is_email_verified: boolean
@@ -21,6 +22,7 @@ interface UserAttributes {
   created_at?: Date
   updated_at?: Date
   deleted_at?: Date
+  email_changed_at?: Date | null
   is_phone_verified: boolean
   pin_hash?: string | null
 }
@@ -35,11 +37,13 @@ class User
   public email!: string
   public password_hash!: string
   public name!: string
+  public nickname?: string | null
   public phone!: string | null
   public role!: 'user' | 'admin'
   public is_email_verified!: boolean
   public is_locked!: boolean
   public is_phone_verified!: boolean
+  public email_changed_at?: Date | null
   public pin_hash?: string | null
   public status!: 'active' | 'dormant' | 'withdrawn'
   public terms_agreed!: boolean
@@ -60,6 +64,7 @@ User.init(
     email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
     password_hash: { type: DataTypes.STRING(255), allowNull: false },
     name: { type: DataTypes.STRING(50), allowNull: false },
+    nickname: { type: DataTypes.STRING(30), allowNull: true, unique: true },
     phone: { type: DataTypes.STRING(20), allowNull: true, unique: true },
     role: {
       type: DataTypes.ENUM('user', 'admin'),
@@ -78,6 +83,7 @@ User.init(
       defaultValue: 'active',
     },
     is_phone_verified: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
+    email_changed_at: { type: DataTypes.DATE, allowNull: true },
     pin_hash: { type: DataTypes.STRING(255), allowNull: true },
     terms_agreed: {
       type: DataTypes.TINYINT,

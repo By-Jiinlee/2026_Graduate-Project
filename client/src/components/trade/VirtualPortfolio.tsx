@@ -284,7 +284,7 @@ export default function VirtualPortfolio() {
       {/* ── 자산 요약 ── */}
       <div style={{
         background: isProfit
-          ? 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)'
+          ? 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)'
           : 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
         borderRadius: '20px',
         padding: '24px 28px',
@@ -296,7 +296,7 @@ export default function VirtualPortfolio() {
         <div style={{
           position: 'absolute', right: '-30px', top: '-30px',
           width: '140px', height: '140px', borderRadius: '50%',
-          backgroundColor: isProfit ? 'rgba(34,197,94,0.08)' : 'rgba(59,130,246,0.08)',
+          backgroundColor: isProfit ? 'rgba(220,38,38,0.06)' : 'rgba(59,130,246,0.08)',
         }} />
         <p style={{ fontSize: '12px', fontWeight: '600', color: '#6b7280', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           총 자산
@@ -308,7 +308,7 @@ export default function VirtualPortfolio() {
         {/* 보유주식 + 계좌잔고 구성 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '12px', color: '#6b7280' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: isProfit ? '#22c55e' : '#3b82f6' }} />
+            <div style={{ width: '10px', height: '10px', borderRadius: '2px', backgroundColor: isProfit ? '#dc2626' : '#3b82f6' }} />
             <span>보유주식</span>
             <span style={{ fontWeight: '700', color: '#111' }}>₩{portfolio.totalEval.toLocaleString()}</span>
           </div>
@@ -323,13 +323,13 @@ export default function VirtualPortfolio() {
         <div style={{ display: 'flex', gap: '32px' }}>
           <div>
             <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '2px' }}>총 손익</p>
-            <p style={{ fontSize: '16px', fontWeight: '700', color: isProfit ? '#16a34a' : '#2563eb' }}>
+            <p style={{ fontSize: '16px', fontWeight: '700', color: isProfit ? '#dc2626' : '#2563eb' }}>
               {isProfit ? '+' : ''}₩{portfolio.totalPnl.toLocaleString()}
             </p>
           </div>
           <div>
             <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '2px' }}>수익률</p>
-            <p style={{ fontSize: '16px', fontWeight: '700', color: portfolio.totalPnlRate >= 0 ? '#16a34a' : '#2563eb' }}>
+            <p style={{ fontSize: '16px', fontWeight: '700', color: portfolio.totalPnlRate >= 0 ? '#dc2626' : '#2563eb' }}>
               {portfolio.totalPnlRate >= 0 ? '+' : ''}{portfolio.totalPnlRate.toFixed(2)}%
             </p>
           </div>
@@ -340,7 +340,7 @@ export default function VirtualPortfolio() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '24px' }}>
         {[
           { label: '주식 평가금액', value: `₩${portfolio.totalEval.toLocaleString()}` },
-          { label: '평가 손익률', value: `${portfolio.totalPnlRate >= 0 ? '+' : ''}${portfolio.totalPnlRate.toFixed(2)}%`, color: portfolio.totalPnlRate >= 0 ? '#16a34a' : '#2563eb' },
+          { label: '평가 손익률', value: `${portfolio.totalPnlRate >= 0 ? '+' : ''}${portfolio.totalPnlRate.toFixed(2)}%`, color: portfolio.totalPnlRate >= 0 ? '#dc2626' : '#2563eb' },
           { label: '초기 지급금', value: `₩${portfolio.initialBalance.toLocaleString()}` },
         ].map(item => (
           <div key={item.label} style={{ backgroundColor: '#f9fafb', borderRadius: '14px', padding: '14px 16px', border: '1px solid #f3f4f6' }}>
@@ -413,10 +413,10 @@ export default function VirtualPortfolio() {
                     {/* 종목 아이콘 */}
                     <div style={{
                       width: '38px', height: '38px', borderRadius: '10px',
-                      backgroundColor: up ? '#f0fdf4' : '#eff6ff',
+                      backgroundColor: up ? '#fef2f2' : '#eff6ff',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       fontSize: '16px',
-                      color: up ? '#16a34a' : '#2563eb',
+                      color: up ? '#dc2626' : '#2563eb',
                       flexShrink: 0,
                     }}>
                       {up ? '▲' : '▼'}
@@ -436,7 +436,7 @@ export default function VirtualPortfolio() {
                     </p>
                     <p style={{
                       fontSize: '12px', fontWeight: '700',
-                      color: up ? '#16a34a' : '#2563eb',
+                      color: up ? '#dc2626' : '#2563eb',
                     }}>
                       <span style={{ fontSize: '8px', verticalAlign: 'middle' }}>{up ? '▲' : '▼'}</span>
                       {' '}{up ? '+' : ''}{h.pnlRate.toFixed(2)}%

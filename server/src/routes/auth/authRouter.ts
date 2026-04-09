@@ -82,11 +82,20 @@ export default router
 router.post('/phone/send', isAuthenticated, smsCodeRateLimiter, validateSmsCode, authController.sendPhoneCode)
 router.post('/phone/verify', isAuthenticated, smsCodeRateLimiter, validateSmsCode, authController.verifyPhoneCode)
 
-// ─── 내 정보 조회 ─────────────────────────────────────────────
+// ─── 내 정보 조회 / 수정 ──────────────────────────────────────
 router.get('/me', isAuthenticated, authController.getMyInfo)
+router.patch('/me', isAuthenticated, authController.updateProfile)
+router.get('/nickname/check', isAuthenticated, authController.checkNickname)
+router.patch('/password', isAuthenticated, authController.changePassword)
+router.get('/login-records', isAuthenticated, authController.getLoginRecords)
+
+// ─── 이메일 변경 (월 1회, 인증 필요) ─────────────────────────
+router.post('/email/change/send', isAuthenticated, authController.sendEmailChangeCode)
+router.patch('/email', isAuthenticated, authController.changeEmail)
 
 // ─── 신뢰 기기 관리 ──────────────────────────────────────────
 router.get('/devices', isAuthenticated, authController.listTrustedDevices)
+router.post('/devices/register', isAuthenticated, authController.registerDevice)
 router.delete('/devices/:deviceId', isAuthenticated, authController.removeTrustedDevice)
 
 // ─── 거래 nonce 조회 (고액 거래 MetaMask 서명용) ──────────────
