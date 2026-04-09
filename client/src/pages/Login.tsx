@@ -9,6 +9,8 @@ export default function Login() {
     userId: number
     walletAddress: string
     nonce: string
+    isTrustedDevice?: boolean
+    requireWalletSign?: boolean
   } | null>(null)
   const [error, setError] = useState('')
   const navigate = useNavigate()
@@ -27,7 +29,22 @@ export default function Login() {
     if (!res.ok) throw new Error(data.message)
 
     setLoginData(data)
-    setStep(2)
+
+    if (data.isTrustedDevice) {
+      // 신뢰 기기 → MetaMask 없이 자동 step2
+      const res2 = await fetch('http://localhost:3000/api/auth/login/step2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ userId: data.userId, walletAddress: data.walletAddress, signature: '', skipSignature: true }),
+      })
+      const data2 = await res2.json()
+      if (!res2.ok) throw new Error(data2.message)
+      localStorage.setItem('loginTime', Date.now().toString())
+      window.location.href = '/'
+    } else {
+      setStep(2)
+    }
   } catch (err: any) {
     setError(err.message)
   }
