@@ -18,7 +18,10 @@ function hashToken(token: string): string {
 }
 
 function buildFingerprint(userAgent: string, ip: string): string {
-  return crypto.createHash('sha256').update(`${userAgent}||${ip}`).digest('hex')
+  // [개발] IP 제외 (로컬 환경에서 ::1/127.0.0.1 혼용으로 불일치 발생)
+  return crypto.createHash('sha256').update(userAgent).digest('hex')
+  // [배포시 교체] IP 포함 핑거프린트
+  // return crypto.createHash('sha256').update(`${userAgent}||${ip}`).digest('hex')
 }
 
 function detectDeviceType(userAgent: string): DeviceType {

@@ -232,7 +232,7 @@ export const logout = async (req: Request, res: Response) => {
     res.clearCookie('accessToken')
     res.clearCookie('refreshToken')
     res.clearCookie('isLoggedIn')
-    res.clearCookie(DEVICE_COOKIE_NAME)
+    // deviceToken은 로그아웃 후에도 유지 (다음 로그인 시 기기 인식용)
     return res.status(200).json({ message: '로그아웃 되었습니다' })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })
