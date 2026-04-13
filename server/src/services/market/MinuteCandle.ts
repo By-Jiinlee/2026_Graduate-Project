@@ -46,17 +46,25 @@ const fetchMinuteCandlesOnce = async (
         )
         return res.data?.output2 ?? []
     } catch (err: any) {
-        // 403은 그대로 throw해서 상위 스케줄러가 skip set에 등록하게 함
         if (err.response?.status === 403) throw err
-        // 그 외 에러는 빈 배열 (일시적 네트워크 오류 등)
-        console.warn(`[MinuteCandle] ${stockCode} API 오류 (${err.response?.status ?? 'unknown'}):`, err.message)
+        if (err.response?.status === 500) {
+            // rate limit일 수 있으니 잠깐 대기 후 빈 배열 반환
+            console.warn(`[MinuteCandle] ${stockCode} API 500 오류 - 2초 대기`)
+            await new Promise((r) => setTimeout(r, 2000))
+        } else {
+            console.warn(`[MinuteCandle] ${stockCode} API 오류 (${err.response?.status ?? 'unknown'}):`, err.message)
+        }
         return []
     }
 }
 
 // ─── 하루치 분봉 전체 수집 ────────────────────────────────────
 
-export const fetchDayCandles = async (stockCode: string, date: string, startHour?: string): Promise<any[]> => {
+export const fetchDayCandles = async (
+    stockCode: string,
+    date: string,
+    startHour?: string
+): Promise<any[]> => {
     const allData: any[] = []
     let currHour = startHour ?? '153000'
 
@@ -91,15 +99,6 @@ export const getActiveStocks = async (): Promise<Stock[]> => {
     )
 }
 
-export const getLastSavedDate = async (stockId: number): Promise<string | null> => {
-    const rows = await sequelize.query<{ last_date: string | null }>(
-        `SELECT DATE_FORMAT(MAX(candle_time), '%Y%m%d') AS last_date
-         FROM stock_minute_candles WHERE stock_id = :stockId AND interval_min = 1`,
-        { replacements: { stockId }, type: QueryTypes.SELECT }
-    )
-    return rows[0]?.last_date ?? null
-}
-
 // 전종목 마지막 분봉 날짜 한번에 조회
 export const getAllLastMinuteDates = async (): Promise<Map<number, string>> => {
     const rows = await sequelize.query<{ stock_id: number; last_date: string }>(
@@ -108,21 +107,7 @@ export const getAllLastMinuteDates = async (): Promise<Map<number, string>> => {
          GROUP BY stock_id`,
         { type: QueryTypes.SELECT }
     )
-    return new Map(rows.map(r => [r.stock_id, r.last_date]))
-}
-
-// 오늘 분봉 이미 수집됐는지 확인 (가장 데이터 많은 날짜가 오늘인지)
-export const isMinuteTodayComplete = async (today: string): Promise<boolean> => {
-    const rows = await sequelize.query<{ best_date: string }>(
-        `SELECT DATE_FORMAT(DATE(candle_time), '%Y%m%d') AS best_date
-         FROM stock_minute_candles
-         WHERE interval_min = 1
-         GROUP BY DATE(candle_time)
-         ORDER BY COUNT(*) DESC, DATE(candle_time) DESC
-         LIMIT 1`,
-        { type: QueryTypes.SELECT }
-    )
-    return rows[0]?.best_date === today
+    return new Map(rows.map((r) => [r.stock_id, r.last_date]))
 }
 
 export const upsertMinuteCandles = async (
@@ -154,17 +139,18 @@ export const upsertMinuteCandles = async (
 
     await sequelize.query(
         `INSERT IGNORE INTO stock_minute_candles
-       (stock_id, candle_time, interval_min, open, high, low, close, volume, trading_value, created_at)
-     VALUES ${placeholders}`,
+         (stock_id, candle_time, interval_min, open, high, low, close, volume, trading_value, created_at)
+         VALUES ${placeholders}`,
         { replacements: flat, type: QueryTypes.INSERT }
     )
 }
+
+// ─── 날짜 유틸 ────────────────────────────────────────────────
 
 export const getToday = (): string =>
     new Date().toISOString().slice(0, 10).replace(/-/g, '')
 
 export const dayAfter = (dateStr: string): string => {
-    // 'YYYYMMDD' 형식 처리
     const normalized = dateStr.length === 8
         ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
         : dateStr

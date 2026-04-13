@@ -70,21 +70,21 @@ connectDB()
 httpServer.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
     // 1단계
-    startStockPriceScheduler() //일봉
+    //startStockPriceScheduler() //일봉
     //startMarketIndexScheduler() //미국주요지수
 
 // 2단계
-    //startStock52WeekScheduler() //52주 신고가 신저가
-    //startForeignAndInstitutionalScheduler() //투자자별 거래량
-    //startShortSellingScheduler() //공매도
-    //startMinuteCandleScheduler() //일분봉
-    //tartListedSharesScheduler() //상장주식수
+    startStock52WeekScheduler() //52주 신고가 신저가
+    startForeignAndInstitutionalScheduler() //투자자별 거래량
+    startShortSellingScheduler() //공매도
+    startMinuteCandleScheduler() //일분봉
+    startListedSharesScheduler() //상장주식수
 
 // 3단계
-    startStabilityScheduler() //안정성 계산
+    //startStabilityScheduler() //안정성 계산
     //startFinancialStatementScheduler()    //재무제표
     //startEcosIndicatorScheduler() //거시경제
 
     // 실시간 시세
-    startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
+    //startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
 })

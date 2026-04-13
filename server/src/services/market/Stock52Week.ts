@@ -33,16 +33,16 @@ export const calculate52Week = async (targetDate: string): Promise<Stock52WeekRo
                    AND price_date <= :targetDate
                  ORDER BY price_date DESC LIMIT 1
              ) AS high_52week_date,
-       w.low_52week,
-       (
-         SELECT price_date FROM stock_prices
-         WHERE stock_id = s.id
-           AND low = w.low_52week
-           AND price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
-           AND price_date <= :targetDate
-         ORDER BY price_date DESC LIMIT 1
-       ) AS low_52week_date,
-       FLOOR(today.close * s.listed_shares / 1000000) AS market_cap
+             w.low_52week,
+             (
+                 SELECT price_date FROM stock_prices
+                 WHERE stock_id = s.id
+                   AND low = w.low_52week
+                   AND price_date >= DATE_SUB(:targetDate, INTERVAL 52 WEEK)
+                   AND price_date <= :targetDate
+                 ORDER BY price_date DESC LIMIT 1
+             ) AS low_52week_date,
+             FLOOR(today.close * s.listed_shares / 1000000) AS market_cap
          FROM stocks s
              JOIN (
              SELECT stock_id, MAX(high) AS high_52week, MIN(low) AS low_52week
@@ -98,12 +98,53 @@ export const upsert52Week = async (rows: Stock52WeekRow[]): Promise<void> => {
     )
 }
 
+// 가장 최근 저장일 조회 (신규 날짜 수집 기준)
 export const getLastSavedDate = async (): Promise<string | null> => {
     const rows = await sequelize.query<{ last_date: string | null }>(
         `SELECT MAX(trade_date) AS last_date FROM stock_52week`,
         { type: QueryTypes.SELECT }
     )
     return rows[0]?.last_date ?? null
+}
+
+// 가장 처음 저장일 조회 (누락 탐지 시작 기준)
+export const getCollectStartDate = async (): Promise<string | null> => {
+    const rows = await sequelize.query<{ first_date: string | null }>(
+        `SELECT MIN(trade_date) AS first_date FROM stock_52week`,
+        { type: QueryTypes.SELECT }
+    )
+    return rows[0]?.first_date ?? null
+}
+
+// ─── 종목별 누락 날짜 탐지 ────────────────────────────────────
+// since 이후 stock_prices 기준 영업일 중 stock_52week에 없는 날짜를 반환
+// COLLATE 명시로 collation 충돌 에러 방지
+
+export const getMissingDatesPerStock = async (
+    since: string
+): Promise<Map<string, string[]>> => {
+    const rows = await sequelize.query<{ stock_code: string; missing_date: string }>(
+        `SELECT s.code AS stock_code,
+                DATE_FORMAT(sp.price_date, '%Y-%m-%d') AS missing_date
+         FROM stocks s
+         JOIN stock_prices sp ON sp.stock_id = s.id
+         LEFT JOIN stock_52week w
+               ON w.stock_code COLLATE utf8mb4_0900_ai_ci = s.code
+               AND w.trade_date = sp.price_date
+         WHERE s.is_active = 1
+           AND s.market IN ('KOSPI', 'KOSDAQ')
+           AND sp.price_date >= :since
+           AND w.trade_date IS NULL
+         ORDER BY s.code, sp.price_date`,
+        { replacements: { since }, type: QueryTypes.SELECT }
+    )
+
+    const map = new Map<string, string[]>()
+    for (const row of rows) {
+        if (!map.has(row.stock_code)) map.set(row.stock_code, [])
+        map.get(row.stock_code)!.push(row.missing_date)
+    }
+    return map
 }
 
 // ─── 날짜 유틸 ────────────────────────────────────────────────
