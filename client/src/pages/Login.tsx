@@ -41,7 +41,8 @@ export default function Login() {
       const data2 = await res2.json()
       if (!res2.ok) throw new Error(data2.message)
       localStorage.setItem('loginTime', Date.now().toString())
-      window.location.href = '/'
+      localStorage.setItem('upTick_user', JSON.stringify(data2.user))
+      window.location.href = data2.user?.is_survey_completed ? '/' : '/survey'
     } else {
       setStep(2)
     }
@@ -94,8 +95,9 @@ export default function Login() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
-        localStorage.setItem('loginTime', Date.now().toString())
-window.location.href = '/'
+      localStorage.setItem('loginTime', Date.now().toString())
+      localStorage.setItem('upTick_user', JSON.stringify(data.user))
+      window.location.href = data.user?.is_survey_completed ? '/' : '/survey'
 
     } catch (err: any) {
       setError(err.message)

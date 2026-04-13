@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { createWalletClient, custom, keccak256, concat, toBytes, getAddress } from 'viem'
@@ -29,6 +29,14 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
   const [showPin, setShowPin] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
+  const [isPhoneVerified, setIsPhoneVerified] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (!isLoggedIn()) return
+    axios.get('http://localhost:3000/api/auth/me', { withCredentials: true })
+      .then(res => setIsPhoneVerified(!!res.data.is_phone_verified))
+      .catch(() => setIsPhoneVerified(false))
+  }, [])
 
   const price = orderType === 'market' ? currentPrice : Number(limitPrice)
   const totalCost = price * Number(quantity)
@@ -140,6 +148,39 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
           }}
         >
           로그인하기
+        </button>
+      </div>
+    )
+  }
+
+  if (isLoggedIn() && isPhoneVerified === false) {
+    return (
+      <div style={{
+        backgroundColor: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: '20px',
+        padding: '36px 24px',
+        textAlign: 'center',
+      }}>
+        <p style={{ fontSize: '28px', marginBottom: '12px' }}>📵</p>
+        <p style={{ fontWeight: '700', fontSize: '15px', color: '#111', marginBottom: '6px' }}>휴대폰 인증이 필요합니다</p>
+        <p style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '20px' }}>
+          실거래 및 모의투자는<br />휴대폰 인증 완료 후 이용 가능합니다
+        </p>
+        <button
+          onClick={() => navigate('/mypage')}
+          style={{
+            padding: '10px 28px',
+            backgroundColor: '#22C55E',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '10px',
+            fontWeight: '700',
+            fontSize: '14px',
+            cursor: 'pointer',
+          }}
+        >
+          인증하러 가기
         </button>
       </div>
     )

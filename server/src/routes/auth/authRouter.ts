@@ -46,6 +46,7 @@ router.post(
 )
 
 // ─── 회원가입 ─────────────────────────────────────────────────
+router.get('/wallet/check', authController.checkWalletAddress)
 router.post('/register', validateRegister, authController.register)
 
 // ─── 로그인 ───────────────────────────────────────────────────
@@ -86,6 +87,7 @@ router.post('/phone/verify', isAuthenticated, smsCodeRateLimiter, validateSmsCod
 router.get('/me', isAuthenticated, authController.getMyInfo)
 router.patch('/me', isAuthenticated, authController.updateProfile)
 router.get('/nickname/check', isAuthenticated, authController.checkNickname)
+router.get('/password/nonce', isAuthenticated, authController.getPasswordNonce)
 router.patch('/password', isAuthenticated, authController.changePassword)
 router.get('/login-records', isAuthenticated, authController.getLoginRecords)
 

@@ -220,12 +220,14 @@ export const register = async (
   })
   if (!emailVerified) throw new Error('이메일 인증이 완료되지 않았습니다')
 
+  let phoneVerifiedDuringRegister = false
   if (phone) {
     const smsVerified = await SmsVerification.findOne({
       where: { phone, is_used: true },
       order: [['created_at', 'DESC']],
     })
     if (!smsVerified) throw new Error('휴대폰 인증이 완료되지 않았습니다')
+    phoneVerifiedDuringRegister = true
   }
 
   const existingWallet = await Wallet.findOne({
@@ -257,7 +259,7 @@ export const register = async (
   is_email_verified: true,
   is_locked: false,
   status: 'active',
-  is_phone_verified: false,  // ← 추가
+  is_phone_verified: phoneVerifiedDuringRegister,
   terms_agreed,
   privacy_agreed,
   location_agreed,
@@ -460,8 +462,14 @@ export const sendPhoneCode = async (userId: number, phone: string): Promise<void
   const code = crypto.randomInt(100000, 999999).toString()
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
 
-  await SmsVerification.create({ phone, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
-  await sendVerificationSms(phone, code)
+  const record = await SmsVerification.create({ phone, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  try {
+    await sendVerificationSms(phone, code)
+  } catch (smsError: any) {
+    await record.destroy()
+    console.error('[SMS 발송 실패]', smsError?.message ?? smsError)
+    throw new Error('SMS 발송에 실패했습니다. 잠시 후 다시 시도해주세요')
+  }
 }
 
 export const verifyPhoneCode = async (userId: number, phone: string, code: string): Promise<void> => {

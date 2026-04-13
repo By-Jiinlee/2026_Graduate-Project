@@ -10,6 +10,7 @@ import { connectDB } from './config/database'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
 import virtualTradeRouter from './routes/trade/virtualTradeRouter'
+import surveyRouter from './routes/user/surveyRouter'
 
 // 스케줄러
 import stockPriceRouter from './routes/market/StockPrice'
@@ -56,6 +57,7 @@ app.use(cors({
 app.use('/api/auth', authRouter)
 app.use('/api/test', contractTestRouter)
 app.use('/api/trade/virtual', virtualTradeRouter)
+app.use('/api/survey', surveyRouter)
 
 // 스케줄러 라우터
 app.use('/api/market/stock-prices', stockPriceRouter)

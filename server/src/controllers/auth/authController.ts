@@ -22,6 +22,7 @@ export const sendEmailCode = async (req: Request, res: Response) => {
     await authService.sendEmailCode(email)
     return res.status(200).json({ message: '인증코드가 발송되었습니다' })
   } catch (error: any) {
+    console.error('[email/send 400]', error.message)
     return res.status(400).json({ message: error.message })
   }
 }
@@ -62,6 +63,24 @@ export const verifySmsCode = async (req: Request, res: Response) => {
 }
 
 // ─── 회원가입 ─────────────────────────────────────────────────
+
+export const checkWalletAddress = async (req: Request, res: Response) => {
+  try {
+    const { address } = req.query as { address: string }
+    if (!address) return res.status(400).json({ message: '지갑 주소가 필요합니다' })
+
+    const existing = await Wallet.findOne({ where: { address } })
+    if (existing) return res.status(200).json({ available: false, reason: 'db' })
+
+    const { isWalletRegistered } = await import('../../services/web3/contractService')
+    const onChain = await isWalletRegistered(address)
+    if (onChain) return res.status(200).json({ available: false, reason: 'onchain' })
+
+    return res.status(200).json({ available: true })
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message })
+  }
+}
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -216,6 +235,9 @@ export const loginStep2 = async (req: Request, res: Response) => {
         name: user.name,
         role: user.role,
         walletAddress,
+        is_phone_verified: user.is_phone_verified,
+        is_survey_completed: user.is_survey_completed,
+        investment_type_id: user.investment_type_id ?? null,
       },
     })
   } catch (error: any) {
@@ -375,12 +397,38 @@ export const changeEmail = async (req: Request, res: Response) => {
 
 const PW_REGEX = /^(?=.*[a-zA-Z])(?=.*[0-9])(?=.*[!@#$%^&*])[a-zA-Z0-9!@#$%^&*]{8,}$/
 
+// 비밀번호 변경용 nonce 조회 (MetaMask 2차 인증)
+export const getPasswordNonce = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const wallet = await Wallet.findOne({ where: { user_id: userId } })
+    if (!wallet) return res.status(404).json({ message: '등록된 지갑이 없습니다' })
+    const { getAuthNonce } = await import('../../services/web3/contractService')
+    const nonce = await getAuthNonce(wallet.address)
+    return res.status(200).json({ walletAddress: wallet.address, nonce: nonce.toString() })
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message })
+  }
+}
+
 export const changePassword = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const { currentPassword, newPassword } = req.body
+    const { currentPassword, newPassword, walletAddress, signature } = req.body
     if (!currentPassword || !newPassword) return res.status(400).json({ message: '비밀번호를 입력해주세요' })
     if (!PW_REGEX.test(newPassword)) return res.status(400).json({ message: '새 비밀번호는 영문, 숫자, 특수문자(!@#$%^&*)를 각 1개 이상 포함한 8자 이상이어야 합니다' })
+
+    // MetaMask 서명 검증 (지갑이 있는 경우 필수)
+    if (walletAddress && signature) {
+      const { getAuthNonce, verifySignature } = await import('../../services/web3/contractService')
+      const nonce = await getAuthNonce(walletAddress)
+      const valid = await verifySignature(walletAddress, nonce, signature)
+      if (!valid) return res.status(400).json({ message: 'MetaMask 서명 검증에 실패했습니다' })
+    } else {
+      // 지갑이 등록되어 있으면 서명 필수
+      const wallet = await Wallet.findOne({ where: { user_id: userId } })
+      if (wallet) return res.status(400).json({ message: 'MetaMask 2차 인증이 필요합니다' })
+    }
 
     const user = await User.findByPk(userId)
     if (!user) return res.status(404).json({ message: '사용자를 찾을 수 없습니다' })

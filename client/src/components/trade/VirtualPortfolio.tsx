@@ -52,6 +52,7 @@ export default function VirtualPortfolio() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'holdings' | 'orders'>('holdings')
   const [ordersLoading, setOrdersLoading] = useState(false)
+  const [isPhoneVerified, setIsPhoneVerified] = useState<boolean | null>(null)
 
   // PIN flow state
   const [pinFlow, setPinFlow] = useState<PinFlow>(null)
@@ -86,7 +87,12 @@ export default function VirtualPortfolio() {
     }
   }, [])
 
-  useEffect(() => { fetchPortfolio() }, [fetchPortfolio])
+  useEffect(() => {
+    fetchPortfolio()
+    axios.get('http://localhost:3000/api/auth/me', { withCredentials: true })
+      .then(r => setIsPhoneVerified(!!r.data.is_phone_verified))
+      .catch(() => setIsPhoneVerified(false))
+  }, [fetchPortfolio])
 
   // 실시간 가격 업데이트 — 크롤러 브로드캐스트 수신 (구독 없이)
   useEffect(() => {
@@ -206,6 +212,44 @@ export default function VirtualPortfolio() {
   // ── Render: no account ───────────────────────────────────────
 
   if (noAccount) {
+    // 휴대폰 미인증 게이트
+    if (isPhoneVerified === false) {
+      return (
+        <div style={{ textAlign: 'center', padding: '48px 20px' }}>
+          <div style={{
+            width: '64px', height: '64px', borderRadius: '20px',
+            backgroundColor: '#fff7ed', display: 'inline-flex',
+            alignItems: 'center', justifyContent: 'center',
+            fontSize: '28px', marginBottom: '20px',
+          }}>
+            🔐
+          </div>
+          <p style={{ fontWeight: '800', fontSize: '18px', marginBottom: '8px', color: '#111' }}>
+            휴대폰 인증 후 이용 가능합니다
+          </p>
+          <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '24px', lineHeight: '1.6' }}>
+            모의투자 계좌 개설을 위해<br />먼저 휴대폰 인증을 완료해주세요.
+          </p>
+          <button
+            onClick={() => navigate('/mypage')}
+            style={{
+              padding: '12px 28px',
+              backgroundColor: '#22C55E',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '12px',
+              fontWeight: '700',
+              fontSize: '14px',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(34,197,94,0.3)',
+            }}
+          >
+            마이페이지에서 인증하기
+          </button>
+        </div>
+      )
+    }
+
     const pinTitles: Record<NonNullable<PinFlow>, string> = {
       set1: 'PIN 설정 (1/2)',
       set2: 'PIN 확인 (2/2)',

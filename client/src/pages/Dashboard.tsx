@@ -1,4 +1,73 @@
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useTradeModeStore } from '../store/tradeModeStore'
+
 export default function Dashboard() {
+  const navigate = useNavigate()
+  const { mode } = useTradeModeStore()
+  const [isPhoneVerified, setIsPhoneVerified] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetch('http://localhost:3000/api/auth/me', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => setIsPhoneVerified(!!data.is_phone_verified))
+      .catch(() => setIsPhoneVerified(false))
+  }, [])
+
+  if (isPhoneVerified === false) {
+    return (
+      <div style={{
+        minHeight: '100vh', backgroundColor: '#f9fafb', display: 'flex',
+        alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', padding: '24px',
+      }}>
+        <div style={{
+          backgroundColor: '#fff', borderRadius: '20px', padding: '48px 40px',
+          maxWidth: '480px', width: '100%', textAlign: 'center',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔐</div>
+          <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1a1a1a', marginBottom: '12px' }}>
+            주식 관리를 이용하려면 추가 설정이 필요합니다
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '28px', textAlign: 'left' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px 16px', backgroundColor: '#f0faf4', borderRadius: '12px', border: '1px solid #c8e6c9' }}>
+              <span style={{ fontSize: '20px', marginTop: '2px' }}>📱</span>
+              <div>
+                <p style={{ fontWeight: '600', color: '#1a1a1a', marginBottom: '4px' }}>1단계 · 휴대폰 인증</p>
+                <p style={{ fontSize: '13px', color: '#666' }}>마이페이지 → 보안 및 인증에서 휴대폰 번호를 인증해주세요.</p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px 16px', backgroundColor: '#f0faf4', borderRadius: '12px', border: '1px solid #c8e6c9' }}>
+              <span style={{ fontSize: '20px', marginTop: '2px' }}>{mode === 'virtual' ? '🎮' : '🏦'}</span>
+              <div>
+                <p style={{ fontWeight: '600', color: '#1a1a1a', marginBottom: '4px' }}>
+                  2단계 · {mode === 'virtual' ? '모의투자 계좌 개설' : '실거래 계좌 연동'}
+                </p>
+                <p style={{ fontSize: '13px', color: '#666' }}>
+                  {mode === 'virtual'
+                    ? '마이페이지 → 투자 성향 정보에서 모의투자 계좌를 개설해주세요.'
+                    : '마이페이지 → 투자 성향 정보에서 실거래 계좌를 연동해주세요.'}
+                </p>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/mypage')}
+            style={{
+              width: '100%', padding: '14px', backgroundColor: '#3CB371',
+              color: '#fff', border: 'none', borderRadius: '10px',
+              fontSize: '15px', fontWeight: '600', cursor: 'pointer',
+            }}
+          >
+            마이페이지로 이동
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (isPhoneVerified === null) return null
+
   return (
     <div
       style={{

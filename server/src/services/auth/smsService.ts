@@ -1,4 +1,6 @@
 import coolsms from 'coolsms-node-sdk'
+import dotenv from 'dotenv'
+dotenv.config()
 
 const messageService = new coolsms(
   process.env.COOLSMS_API_KEY as string,

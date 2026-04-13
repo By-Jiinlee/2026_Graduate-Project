@@ -5,49 +5,64 @@ import { questions, investmentTypes } from '../data/surveyData';
 export default function Survey() {
   const [step, setStep] = useState(0);
   const [totalScore, setTotalScore] = useState(0);
+  const [responses, setResponses] = useState<{ question_num: number; selected_option: number }[]>([]);
   const navigate = useNavigate();
 
-  // 💡 모달창 표시 여부와 결과를 담을 상태(State) 추가
   const [showModal, setShowModal] = useState(false);
   const [finalResult, setFinalResult] = useState<{ id: number; name: string } | null>(null);
 
-  const handleAnswer = (score: number) => {
+  const handleAnswer = (score: number, optionIndex: number) => {
+    const nextResponses = [...responses, { question_num: step + 1, selected_option: optionIndex + 1 }];
     const nextScore = totalScore + score;
 
     if (step < questions.length - 1) {
+      setResponses(nextResponses);
       setTotalScore(nextScore);
       setStep(step + 1);
     } else {
-      finishSurvey(nextScore);
+      finishSurvey(nextScore, nextResponses);
     }
   };
 
-  const finishSurvey = (finalScore: number) => {
-    // 점수 범위에 맞는 유형 찾기
+  const finishSurvey = async (finalScore: number, finalResponses: { question_num: number; selected_option: number }[]) => {
     const resultType = investmentTypes.find(
       (type) => finalScore >= type.minScore && finalScore <= type.maxScore
-    ) || investmentTypes[0]; 
+    ) || investmentTypes[0];
 
-    // LocalStorage 업데이트
+    // 서버에 저장
+    try {
+      await fetch('http://localhost:3000/api/survey/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ responses: finalResponses, investment_type_id: resultType.id }),
+      });
+    } catch {}
+
+    // localStorage 업데이트
     const userStr = localStorage.getItem('upTick_user');
     const user = userStr ? JSON.parse(userStr) : {};
-    
     localStorage.setItem('upTick_user', JSON.stringify({
       ...user,
       is_survey_completed: true,
       investment_type_id: resultType.id,
-      investment_type_name: resultType.name
+      investment_type_name: resultType.name,
     }));
 
-    // 💡 alert() 대신 우리가 만든 예쁜 상태값을 채우고 모달을 켭니다!
     setFinalResult(resultType);
     setShowModal(true);
   };
 
-  // 모달창의 "확인" 버튼을 눌렀을 때 실행될 함수
   const handleCloseModal = () => {
     setShowModal(false);
-    navigate('/mypage'); 
+    navigate('/mypage');
+  };
+
+  const handleSkip = () => {
+    const userStr = localStorage.getItem('upTick_user');
+    const user = userStr ? JSON.parse(userStr) : {};
+    localStorage.setItem('upTick_user', JSON.stringify({ ...user, survey_skipped: true }));
+    navigate('/');
   };
 
   // 진행률 계산 (0% ~ 100%)
@@ -103,9 +118,9 @@ export default function Survey() {
         {/* 선택지 버튼 영역 */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           {questions[step].options.map((opt, i) => (
-            <button 
-              key={i} 
-              onClick={() => handleAnswer(opt.score)}
+            <button
+              key={i}
+              onClick={() => handleAnswer(opt.score, i)}
               style={{
                 padding: '20px',
                 borderRadius: '16px',
@@ -133,9 +148,22 @@ export default function Survey() {
             </button>
           ))}
         </div>
+
+        {/* 다음에 하기 */}
+        <div style={{ textAlign: 'center', marginTop: '28px' }}>
+          <button
+            onClick={handleSkip}
+            style={{
+              background: 'none', border: 'none', color: '#bbb',
+              fontSize: '13px', cursor: 'pointer', textDecoration: 'underline',
+            }}
+          >
+            다음에 하기
+          </button>
+        </div>
       </div>
 
-      {/* 💡 예쁜 커스텀 결과 팝업창 (Modal) */}
+      {/* 결과 팝업 */}
       {showModal && finalResult && (
         <div style={{
           position: 'fixed',

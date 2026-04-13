@@ -1,7 +1,79 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTradeModeStore } from '../store/tradeModeStore'
+import { useProfileStore } from '../store/profileStore'
 import VirtualPortfolio from '../components/trade/VirtualPortfolio'
+
+function AccountSection({ mode }: { mode: 'real' | 'virtual' }) {
+  const [hasAccount, setHasAccount] = useState<boolean | null>(null)
+  const [opening, setOpening] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    if (mode !== 'virtual') return
+    fetch('http://localhost:3000/api/trade/virtual/portfolio', { credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => setHasAccount(!!data.balance || data.balance === 0))
+      .catch(() => setHasAccount(false))
+  }, [mode])
+
+  if (mode === 'real') {
+    return (
+      <div className="p-5 bg-blue-50 border border-blue-200 rounded-2xl text-center">
+        <p className="text-sm text-gray-600 mb-4">실거래 계좌를 연동하면 실제 주식 거래가 가능합니다.</p>
+        <button className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition text-sm">
+          실거래 계좌 연동
+        </button>
+      </div>
+    )
+  }
+
+  if (hasAccount === null) return <p className="text-sm text-gray-400">로딩 중...</p>
+
+  if (hasAccount) {
+    return (
+      <div className="p-4 bg-green-50 border border-green-200 rounded-xl text-center">
+        <p className="text-sm text-[#22C55E] font-semibold">✅ 모의투자 계좌가 개설되어 있습니다.</p>
+      </div>
+    )
+  }
+
+  const handleOpen = async () => {
+    setOpening(true)
+    setMsg('')
+    try {
+      const res = await fetch('http://localhost:3000/api/trade/virtual/account/open', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message)
+      setHasAccount(true)
+      setMsg('계좌가 개설되었습니다!')
+    } catch (e: any) {
+      setMsg(e.message)
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="p-5 bg-gray-50 border border-gray-200 rounded-2xl text-center">
+        <p className="text-sm text-gray-600 mb-1">아직 모의투자 계좌가 없습니다.</p>
+        <p className="text-xs text-gray-400">계좌 개설 시 초기 자금 1,000만원이 지급됩니다.</p>
+      </div>
+      {msg && <p className={`text-sm font-semibold text-center ${msg.includes('개설') ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg}</p>}
+      <button
+        onClick={handleOpen}
+        disabled={opening}
+        className="w-full py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
+      >
+        {opening ? '개설 중...' : '모의투자 계좌 개설'}
+      </button>
+    </div>
+  )
+}
 
 interface TrustedDevice {
   id: number
@@ -39,6 +111,8 @@ export default function MyPage() {
 
   const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'investment' | 'settings'>('profile')
   const { mode } = useTradeModeStore()
+  const { profileImage, setProfileImage } = useProfileStore()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // ── 유저 정보 ──────────────────────────────────────────────
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
@@ -58,8 +132,10 @@ export default function MyPage() {
   // ── 비밀번호 변경 ───────────────────────────────────────────
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
   const [pwMsg, setPwMsg] = useState('')
   const [pwLoading, setPwLoading] = useState(false)
+  const [pwMetamaskStep, setPwMetamaskStep] = useState<'idle' | 'signing'>('idle')
 
   // ── 휴대폰 인증 ─────────────────────────────────────────────
   const [phone, setPhone] = useState('')
@@ -83,7 +159,8 @@ export default function MyPage() {
   // ── 투자성향 ────────────────────────────────────────────────
   const userStr = localStorage.getItem('upTick_user')
   const user = userStr ? JSON.parse(userStr) : {}
-  const investmentTypeName = user.investment_type_name || '아직 분석된 성향이 없습니다.'
+  const investmentTypeName = user.investment_type_name || null
+  const isSurveyCompleted = !!user.is_survey_completed
 
   // ── 데이터 로드 ─────────────────────────────────────────────
   const fetchMyInfo = useCallback(async () => {
@@ -126,6 +203,27 @@ export default function MyPage() {
       fetchLoginRecords()
     }
   }, [activeTab, fetchDevices, fetchLoginRecords])
+
+  // ── 프로필 이미지 ──────────────────────────────────────────
+  const [imageError, setImageError] = useState('')
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImageError('')
+    const allowed = ['image/jpeg', 'image/png', 'image/webp']
+    if (!allowed.includes(file.type)) { setImageError('JPG, PNG, WEBP 형식만 업로드 가능합니다'); return }
+    if (file.size > 5 * 1024 * 1024) { setImageError('파일 크기는 5MB 이하여야 합니다'); return }
+    const reader = new FileReader()
+    reader.onload = (ev) => setProfileImage(ev.target?.result as string)
+    reader.readAsDataURL(file)
+  }
+
+  const handleRemoveImage = () => {
+    setProfileImage(null)
+    setImageError('')
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   // ── 닉네임 중복 확인 ────────────────────────────────────────
   const handleCheckNickname = async () => {
@@ -211,25 +309,73 @@ export default function MyPage() {
     }
   }
 
-  // ── 비밀번호 변경 ───────────────────────────────────────────
+  // ── 비밀번호 변경 (MetaMask 2차 인증 포함) ─────────────────
   const handleChangePassword = async () => {
-    if (!currentPw || !newPw) { setPwMsg('모든 항목을 입력해주세요'); return }
+    if (!currentPw || !newPw || !confirmPw) { setPwMsg('모든 항목을 입력해주세요'); return }
+    if (newPw !== confirmPw) { setPwMsg('새 비밀번호가 일치하지 않습니다'); return }
     try {
       setPwLoading(true)
       setPwMsg('')
+
+      // 1. nonce 조회
+      const nonceRes = await fetch(`${API}/password/nonce`, { credentials: 'include' })
+      const nonceData = await nonceRes.json()
+
+      let walletAddress: string | null = null
+      let signature: string | null = null
+
+      if (nonceRes.ok && nonceData.walletAddress) {
+        // 2. MetaMask 서명
+        if (!window.ethereum) throw new Error('MetaMask가 설치되어 있지 않습니다')
+        setPwMetamaskStep('signing')
+
+        const { keccak256, concat, toBytes, getAddress } = await import('viem')
+        const CONTRACT_ADDRESS = '0xe7BBeA01683414DEd829f08e8d6822eF0CD7a38a'
+        const CHAIN_ID = BigInt(11155111)
+
+        const innerHash = keccak256(
+          concat([
+            toBytes(CHAIN_ID, { size: 32 }),
+            toBytes(getAddress(CONTRACT_ADDRESS), { size: 20 }),
+            toBytes(getAddress(nonceData.walletAddress), { size: 20 }),
+            toBytes(BigInt(nonceData.nonce), { size: 32 }),
+          ])
+        )
+
+        const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+        signature = await window.ethereum.request({
+          method: 'personal_sign',
+          params: [innerHash, accounts[0]],
+        })
+        walletAddress = nonceData.walletAddress
+        setPwMetamaskStep('idle')
+      }
+
+      // 3. 비밀번호 변경 요청
       const res = await fetch(`${API}/password`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentPassword: currentPw, newPassword: newPw }),
+        body: JSON.stringify({
+          currentPassword: currentPw,
+          newPassword: newPw,
+          walletAddress,
+          signature,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
       setPwMsg('비밀번호가 변경되었습니다')
       setCurrentPw('')
       setNewPw('')
+      setConfirmPw('')
     } catch (err: any) {
-      setPwMsg(err.message)
+      if (err.code === 4001) {
+        setPwMsg('MetaMask 서명이 거부되었습니다')
+      } else {
+        setPwMsg(err.message)
+      }
+      setPwMetamaskStep('idle')
     } finally {
       setPwLoading(false)
     }
@@ -384,171 +530,201 @@ export default function MyPage() {
 
         {/* 2. 계정 관리 섹션 */}
         <section className="py-12">
-          <h2 className="text-2xl font-black mb-10">계정 관리</h2>
+          <h2 className="text-2xl font-black mb-8">계정 관리</h2>
 
-          <div className="flex items-start gap-12">
+          <div className="flex items-start gap-8">
             {/* 좌측: 탭 메뉴 */}
-            <div className="w-48 shrink-0 flex flex-col gap-2">
-              {(['profile', 'security', 'investment', 'settings'] as const).map(tab => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`text-left px-4 py-3 rounded-xl font-bold transition ${activeTab === tab ? 'bg-[#22C55E]/10 text-[#22C55E]' : 'text-gray-400 hover:bg-gray-50 hover:text-gray-800'}`}
-                >
-                  {tab === 'profile' ? '프로필 & 개인정보' : tab === 'security' ? '보안 및 인증' : tab === 'investment' ? '투자 성향 정보' : '환경설정'}
-                </button>
-              ))}
+            <div className="w-52 shrink-0">
+              <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+                {([
+                  { key: 'profile', icon: '👤', label: '프로필 & 개인정보' },
+                  { key: 'security', icon: '🔒', label: '보안 및 인증' },
+                  { key: 'investment', icon: '📊', label: '투자 성향 정보' },
+                  { key: 'settings', icon: '⚙️', label: '환경설정' },
+                ] as const).map((item, i, arr) => (
+                  <button
+                    key={item.key}
+                    onClick={() => setActiveTab(item.key)}
+                    className={`w-full text-left px-5 py-4 flex items-center gap-3 transition font-semibold text-sm
+                      ${activeTab === item.key ? 'bg-[#22C55E]/8 text-[#22C55E] border-l-[3px] border-[#22C55E]' : 'text-gray-500 hover:bg-gray-50 hover:text-gray-800 border-l-[3px] border-transparent'}
+                      ${i < arr.length - 1 ? 'border-b border-gray-50' : ''}`}
+                  >
+                    <span className="text-base">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* 우측: 탭별 콘텐츠 */}
-            <div className="flex-1 min-h-[400px] bg-white border border-gray-100 rounded-3xl shadow-sm p-10">
+            <div className="flex-1 min-h-[400px] bg-white border border-gray-100 rounded-2xl shadow-sm p-8">
 
               {/* ── 프로필 탭 ── */}
               {activeTab === 'profile' && (
-                <div className="space-y-10">
-                  <div>
-                    <h3 className="font-black text-xl mb-6">프로필 설정</h3>
-                    <div className="space-y-6 max-w-md">
+                <div className="space-y-8">
+                  <h3 className="font-black text-xl text-gray-900">프로필 설정</h3>
 
-                      {/* 이름 (변경 불가) */}
-                      <div>
-                        <label className="block font-bold text-sm text-gray-600 mb-2">이름</label>
-                        <input
-                          type="text"
-                          value={userInfo?.name ?? ''}
-                          readOnly
-                          className="w-full p-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-400 outline-none cursor-not-allowed"
-                        />
-                        <p className="text-xs text-gray-400 mt-1">이름은 변경할 수 없습니다.</p>
-                      </div>
-
-                      {/* 닉네임 */}
-                      <div>
-                        <label className="block font-bold text-sm text-gray-600 mb-2">
-                          닉네임
-                          <span className="ml-2 text-xs text-gray-400 font-normal">커뮤니티에서 사용됩니다</span>
-                        </label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={nickname}
-                            onChange={(e) => { setNickname(e.target.value); setNicknameCheck(null) }}
-                            placeholder="2~20자, 한글/영문/숫자/_"
-                            className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition"
-                          />
-                          <button
-                            onClick={handleCheckNickname}
-                            className="px-4 border border-[#22C55E] text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition text-sm whitespace-nowrap"
-                          >
-                            중복확인
+                  {/* 프로필 사진 */}
+                  <div className="flex items-center gap-6 p-5 bg-gray-50 rounded-2xl">
+                    <div className="w-18 h-18 rounded-full bg-[#22C55E] flex items-center justify-center overflow-hidden shrink-0 border-2 border-white shadow-md" style={{width:72,height:72}}>
+                      {profileImage
+                        ? <img src={profileImage} alt="프로필" className="w-full h-full object-cover" />
+                        : <span className="text-3xl">👤</span>
+                      }
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-bold text-sm text-gray-700 mb-1">{userInfo?.name ?? ''}</p>
+                      <p className="text-xs text-gray-400 mb-3">{userInfo?.email ?? ''}</p>
+                      <div className="flex gap-2">
+                        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleImageChange} />
+                        <button onClick={() => fileInputRef.current?.click()} className="px-3 py-1.5 bg-white border border-gray-200 text-gray-600 font-semibold rounded-lg hover:border-[#22C55E] hover:text-[#22C55E] transition text-xs shadow-sm">
+                          사진 변경
+                        </button>
+                        {profileImage && (
+                          <button onClick={handleRemoveImage} className="px-3 py-1.5 bg-white border border-gray-200 text-gray-400 font-semibold rounded-lg hover:bg-gray-50 transition text-xs shadow-sm">
+                            제거
                           </button>
-                        </div>
-                        {nicknameCheck && (
-                          <p className={`text-xs mt-1 font-semibold ${nicknameCheck.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>
-                            {nicknameCheck.msg}
-                          </p>
                         )}
                       </div>
-
-                      {/* 이메일 */}
-                      <div>
-                        <label className="block font-bold text-sm text-gray-600 mb-2">
-                          이메일
-                          {userInfo?.email_changed_at && (() => {
-                            const days = Math.floor((Date.now() - new Date(userInfo.email_changed_at!).getTime()) / (1000 * 60 * 60 * 24))
-                            const daysLeft = 30 - days
-                            return daysLeft > 0
-                              ? <span className="ml-2 text-xs text-orange-400 font-normal">변경까지 {daysLeft}일 남음</span>
-                              : null
-                          })()}
-                        </label>
-                        <div className="flex gap-2">
-                          <input
-                            type="email"
-                            value={userInfo?.email ?? ''}
-                            readOnly
-                            className="flex-1 p-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-500 outline-none"
-                          />
-                          <button
-                            onClick={() => { setEmailChanging(v => !v); setEmailMsg(''); setEmailStep('input'); setNewEmail(''); setEmailCode('') }}
-                            className="px-4 border border-gray-300 font-bold rounded-xl hover:bg-gray-50 transition text-sm"
-                          >
-                            {emailChanging ? '취소' : '변경'}
-                          </button>
-                        </div>
-
-                        {emailChanging && (
-                          <div className="mt-3 space-y-2">
-                            <div className="flex gap-2">
-                              <input
-                                type="email"
-                                placeholder="새 이메일 주소"
-                                value={newEmail}
-                                onChange={(e) => setNewEmail(e.target.value)}
-                                disabled={emailStep === 'verify'}
-                                className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition text-sm disabled:bg-gray-50"
-                              />
-                              <button
-                                onClick={handleSendEmailChangeCode}
-                                disabled={emailLoading || emailStep === 'verify'}
-                                className="px-4 border border-[#22C55E] text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition text-sm disabled:opacity-50 whitespace-nowrap"
-                              >
-                                인증코드 발송
-                              </button>
-                            </div>
-                            {emailStep === 'verify' && (
-                              <div className="flex gap-2">
-                                <input
-                                  type="text"
-                                  placeholder="인증코드 6자리"
-                                  value={emailCode}
-                                  onChange={(e) => setEmailCode(e.target.value)}
-                                  className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition text-sm"
-                                />
-                                <button
-                                  onClick={handleVerifyEmail}
-                                  disabled={emailLoading}
-                                  className="px-4 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
-                                >
-                                  확인
-                                </button>
-                              </div>
-                            )}
-                            {emailMsg && (
-                              <p className={`text-xs font-semibold ${emailMsg.includes('발송') || emailMsg.includes('변경되었습니다') ? 'text-[#22C55E]' : 'text-red-500'}`}>
-                                {emailMsg}
-                              </p>
-                            )}
-                            <p className="text-xs text-gray-400">* 이메일은 30일에 1번만 변경할 수 있습니다.</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {profileMsg && (
-                        <p className={`text-sm font-semibold ${profileMsg === '저장되었습니다' ? 'text-[#22C55E]' : 'text-red-500'}`}>{profileMsg}</p>
-                      )}
-
-                      <button
-                        onClick={handleSaveProfile}
-                        disabled={profileSaving}
-                        className="w-full py-4 bg-gray-900 text-white font-bold rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
-                      >
-                        {profileSaving ? '저장 중...' : '닉네임 저장하기'}
-                      </button>
+                      {imageError && <p className="text-xs text-red-500 mt-2 font-semibold">{imageError}</p>}
                     </div>
                   </div>
 
+                  {/* 폼 필드들 */}
+                  <div className="space-y-5 max-w-md">
+
+                    {/* 이름 */}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">이름</label>
+                      <input
+                        type="text"
+                        value={userInfo?.name ?? ''}
+                        readOnly
+                        className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-gray-400 text-sm outline-none cursor-not-allowed"
+                      />
+                      <p className="text-xs text-gray-400 mt-1">이름은 변경할 수 없습니다.</p>
+                    </div>
+
+                    {/* 닉네임 */}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">
+                        닉네임 <span className="normal-case font-normal text-gray-400">· 커뮤니티에서 사용됩니다</span>
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={nickname}
+                          onChange={(e) => { setNickname(e.target.value); setNicknameCheck(null) }}
+                          placeholder="2~20자, 한글/영문/숫자/_"
+                          className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/10 transition placeholder-gray-300"
+                        />
+                        <button
+                          onClick={handleCheckNickname}
+                          className="px-4 py-3 bg-[#22C55E]/10 text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition text-sm whitespace-nowrap"
+                        >
+                          중복확인
+                        </button>
+                      </div>
+                      {nicknameCheck && (
+                        <p className={`text-xs mt-1.5 font-semibold ${nicknameCheck.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>
+                          {nicknameCheck.ok ? '✓ ' : '✗ '}{nicknameCheck.msg}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 이메일 */}
+                    <div>
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">
+                        이메일
+                        {userInfo?.email_changed_at && (() => {
+                          const days = Math.floor((Date.now() - new Date(userInfo.email_changed_at!).getTime()) / (1000 * 60 * 60 * 24))
+                          const daysLeft = 30 - days
+                          return daysLeft > 0
+                            ? <span className="ml-2 normal-case font-normal text-orange-400">변경까지 {daysLeft}일 남음</span>
+                            : null
+                        })()}
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="email"
+                          value={userInfo?.email ?? ''}
+                          readOnly
+                          className="flex-1 px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm text-gray-500 outline-none"
+                        />
+                        <button
+                          onClick={() => { setEmailChanging(v => !v); setEmailMsg(''); setEmailStep('input'); setNewEmail(''); setEmailCode('') }}
+                          className="px-4 py-3 bg-white border border-gray-200 text-gray-500 font-semibold rounded-xl hover:border-gray-300 hover:text-gray-700 transition text-sm"
+                        >
+                          {emailChanging ? '취소' : '변경'}
+                        </button>
+                      </div>
+                      {emailChanging && (
+                        <div className="mt-3 space-y-2 p-4 bg-gray-50 rounded-xl border border-gray-100">
+                          <div className="flex gap-2">
+                            <input
+                              type="email"
+                              placeholder="새 이메일 주소"
+                              value={newEmail}
+                              onChange={(e) => setNewEmail(e.target.value)}
+                              disabled={emailStep === 'verify'}
+                              className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/10 transition text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                            />
+                            <button
+                              onClick={handleSendEmailChangeCode}
+                              disabled={emailLoading || emailStep === 'verify'}
+                              className="px-4 py-2.5 bg-[#22C55E]/10 text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition text-sm disabled:opacity-40 whitespace-nowrap"
+                            >
+                              코드 발송
+                            </button>
+                          </div>
+                          {emailStep === 'verify' && (
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                placeholder="인증코드 6자리"
+                                value={emailCode}
+                                onChange={(e) => setEmailCode(e.target.value)}
+                                className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition text-sm"
+                              />
+                              <button
+                                onClick={handleVerifyEmail}
+                                disabled={emailLoading}
+                                className="px-4 py-2.5 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
+                              >
+                                확인
+                              </button>
+                            </div>
+                          )}
+                          {emailMsg && (
+                            <p className={`text-xs font-semibold ${emailMsg.includes('발송') || emailMsg.includes('변경되었습니다') ? 'text-[#22C55E]' : 'text-red-500'}`}>{emailMsg}</p>
+                          )}
+                          <p className="text-xs text-gray-400">* 이메일은 30일에 1번만 변경할 수 있습니다.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {profileMsg && (
+                      <p className={`text-sm font-semibold ${profileMsg === '저장되었습니다' ? 'text-[#22C55E]' : 'text-red-500'}`}>{profileMsg}</p>
+                    )}
+
+                    <button
+                      onClick={handleSaveProfile}
+                      disabled={profileSaving}
+                      className="w-full py-3.5 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50 shadow-sm shadow-[#22C55E]/20"
+                    >
+                      {profileSaving ? '저장 중...' : '닉네임 저장'}
+                    </button>
+                  </div>
+
                   {/* 회원 탈퇴 */}
-                  <div className="pt-8 border-t border-gray-100">
-                    <h4 className="text-sm font-bold text-gray-800 mb-2">계정 탈퇴</h4>
-                    <p className="text-xs text-gray-400 mb-4">
-                      탈퇴 시 모든 데이터는 복구되지 않으며 온체인 지갑 등록도 해제됩니다.
-                    </p>
-                    {withdrawError && <p className="text-xs text-red-500 mb-3">{withdrawError}</p>}
+                  <div className="pt-6 border-t border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">계정 탈퇴</p>
+                    <p className="text-xs text-gray-400 mb-3">탈퇴 시 모든 데이터는 복구되지 않으며 온체인 지갑 등록도 해제됩니다.</p>
+                    {withdrawError && <p className="text-xs text-red-500 mb-2">{withdrawError}</p>}
                     <button
                       onClick={handleWithdraw}
                       disabled={withdrawLoading}
-                      className="text-sm font-bold text-red-400 hover:text-red-600 underline underline-offset-4 transition disabled:text-gray-300 disabled:cursor-not-allowed"
+                      className="text-xs font-bold text-red-400 hover:text-red-600 underline underline-offset-4 transition disabled:text-gray-300 disabled:cursor-not-allowed"
                     >
                       {withdrawLoading ? '처리 중...' : '회원 탈퇴하기'}
                     </button>
@@ -558,123 +734,169 @@ export default function MyPage() {
 
               {/* ── 보안 탭 ── */}
               {activeTab === 'security' && (
-                <div className="space-y-10">
-                  <h3 className="font-black text-xl mb-6">보안 및 인증</h3>
+                <div className="space-y-8">
+                  <h3 className="font-black text-xl text-gray-900">보안 및 인증</h3>
 
-                  <div className="space-y-8 max-w-lg">
+                  <div className="space-y-7 max-w-lg">
 
                     {/* 비밀번호 변경 */}
                     <div>
-                      <h4 className="font-bold text-gray-800 mb-3">비밀번호 변경</h4>
-                      <div className="space-y-3">
+                      <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">비밀번호 변경</label>
+                      <div className="space-y-2.5">
                         <input
                           type="password"
                           placeholder="현재 비밀번호"
                           value={currentPw}
                           onChange={(e) => setCurrentPw(e.target.value)}
-                          className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition"
+                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/10 transition placeholder-gray-300"
                         />
                         <input
                           type="password"
-                          placeholder="새 비밀번호 (영문+숫자+특수문자 8자 이상)"
+                          placeholder="새 비밀번호"
                           value={newPw}
-                          onChange={(e) => setNewPw(e.target.value)}
-                          className="w-full p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition"
+                          onChange={(e) => { setNewPw(e.target.value); if (!e.target.value) setConfirmPw('') }}
+                          className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/10 transition placeholder-gray-300"
                         />
-                        {pwMsg && (
-                          <p className={`text-sm font-semibold ${pwMsg.includes('변경되었습니다') ? 'text-[#22C55E]' : 'text-red-500'}`}>{pwMsg}</p>
+                        {newPw && (
+                          <>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {[
+                                { label: '8자 이상', ok: newPw.length >= 8 },
+                                { label: '영문 포함', ok: /[a-zA-Z]/.test(newPw) },
+                                { label: '숫자 포함', ok: /[0-9]/.test(newPw) },
+                                { label: '특수문자 포함', ok: /[!@#$%^&*]/.test(newPw) },
+                              ].map(rule => (
+                                <span key={rule.label} className={`text-xs px-2.5 py-1 rounded-full font-semibold ${rule.ok ? 'bg-green-50 text-[#22C55E]' : 'bg-red-50 text-red-500'}`}>
+                                  {rule.ok ? '✓' : '✗'} {rule.label}
+                                </span>
+                              ))}
+                            </div>
+                            <input
+                              type="password"
+                              placeholder="새 비밀번호 확인"
+                              value={confirmPw}
+                              onChange={(e) => setConfirmPw(e.target.value)}
+                              className={`w-full px-4 py-3 bg-white border rounded-xl text-sm outline-none focus:ring-2 transition placeholder-gray-300
+                                ${confirmPw
+                                  ? confirmPw === newPw
+                                    ? 'border-[#22C55E] focus:ring-[#22C55E]/10'
+                                    : 'border-red-400 focus:ring-red-400/10'
+                                  : 'border-gray-200 focus:border-[#22C55E] focus:ring-[#22C55E]/10'}`}
+                            />
+                            {confirmPw && confirmPw !== newPw && (
+                              <p className="text-xs text-red-500 font-semibold">비밀번호가 일치하지 않습니다</p>
+                            )}
+                            {confirmPw && confirmPw === newPw && (
+                              <p className="text-xs text-[#22C55E] font-semibold">✓ 비밀번호가 일치합니다</p>
+                            )}
+                          </>
                         )}
+                        {pwMetamaskStep === 'signing' && (
+                          <div className="flex items-center gap-2 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl">
+                            <span className="text-base">🦊</span>
+                            <p className="text-xs font-semibold text-orange-600">MetaMask에서 서명 요청을 확인해주세요...</p>
+                          </div>
+                        )}
+                        {pwMsg && <p className={`text-xs font-semibold ${pwMsg.includes('변경되었습니다') ? 'text-[#22C55E]' : 'text-red-500'}`}>{pwMsg}</p>}
                         <button
                           onClick={handleChangePassword}
-                          disabled={pwLoading}
-                          className="px-5 py-3 bg-gray-900 text-white font-bold rounded-xl hover:bg-gray-800 transition text-sm disabled:opacity-50"
+                          disabled={pwLoading || !currentPw || !newPw || !confirmPw || newPw !== confirmPw}
+                          className="px-5 py-3 bg-gray-900 text-white font-bold rounded-xl hover:bg-gray-700 transition text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                         >
-                          {pwLoading ? '변경 중...' : '비밀번호 업데이트'}
+                          {pwLoading ? (pwMetamaskStep === 'signing' ? '서명 대기 중...' : '변경 중...') : '비밀번호 업데이트'}
                         </button>
                       </div>
                     </div>
 
-                    <div className="border-t border-gray-100" />
+                    <div className="border-t border-gray-50" />
 
                     {/* 휴대폰 번호 인증 */}
                     <div>
-                      <h4 className="font-bold text-gray-800 mb-3">
-                        휴대폰 번호
-                        {userInfo?.is_phone_verified && (
-                          <span className="ml-2 text-xs text-[#22C55E] font-semibold bg-green-50 px-2 py-0.5 rounded-full">인증 완료</span>
-                        )}
-                      </h4>
-                      <div className="space-y-3">
-                        <div className="flex gap-2">
-                          <input
-                            type="tel"
-                            placeholder="010-0000-0000"
-                            value={phone}
-                            onChange={(e) => setPhone(e.target.value)}
-                            disabled={phoneStep === 'verify'}
-                            className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition disabled:bg-gray-50"
-                          />
-                          <button
-                            onClick={handleSendPhoneCode}
-                            disabled={phoneLoading || phoneStep === 'verify'}
-                            className="px-4 border border-[#22C55E] text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition text-sm disabled:opacity-50"
-                          >
-                            인증번호 발송
-                          </button>
+                      <div className="flex items-center gap-2 mb-3">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">휴대폰 번호</label>
+                        {userInfo?.is_phone_verified
+                          ? <span className="text-xs text-[#22C55E] font-semibold bg-green-50 px-2 py-0.5 rounded-full">✓ 인증 완료</span>
+                          : <span className="text-xs text-orange-500 font-semibold bg-orange-50 px-2 py-0.5 rounded-full">미완료</span>
+                        }
+                      </div>
+                      {userInfo?.is_phone_verified ? (
+                        <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl">
+                          <span className="flex-1 text-sm text-gray-700 font-medium">{phone}</span>
+                          <span className="text-xs text-gray-400">변경 불가</span>
                         </div>
-                        {phoneStep === 'verify' && (
+                      ) : (
+                        <div className="space-y-2.5">
                           <div className="flex gap-2">
                             <input
-                              type="text"
-                              placeholder="인증번호 6자리"
-                              value={phoneCode}
-                              onChange={(e) => setPhoneCode(e.target.value)}
-                              className="flex-1 p-3 border border-gray-200 rounded-xl outline-none focus:border-[#22C55E] transition"
+                              type="tel"
+                              placeholder="01012345678 (- 없이 입력)"
+                              value={phone}
+                              onChange={(e) => setPhone(e.target.value)}
+                              disabled={phoneStep === 'verify'}
+                              className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/10 transition disabled:bg-gray-50 disabled:text-gray-400 placeholder-gray-300"
                             />
                             <button
-                              onClick={handleVerifyPhone}
-                              disabled={phoneLoading}
-                              className="px-4 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
+                              onClick={handleSendPhoneCode}
+                              disabled={phoneLoading || phoneStep === 'verify'}
+                              className="px-4 py-3 bg-[#22C55E]/10 text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition text-sm disabled:opacity-40 whitespace-nowrap"
                             >
-                              확인
+                              인증번호 발송
                             </button>
                           </div>
-                        )}
-                        {phoneMsg && (
-                          <p className={`text-sm font-semibold ${phoneMsg.includes('완료') || phoneMsg.includes('발송') ? 'text-[#22C55E]' : 'text-red-500'}`}>{phoneMsg}</p>
-                        )}
-                      </div>
+                          {phoneStep === 'verify' && (
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                placeholder="인증번호 6자리"
+                                value={phoneCode}
+                                onChange={(e) => setPhoneCode(e.target.value)}
+                                className="flex-1 px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm outline-none focus:border-[#22C55E] focus:ring-2 focus:ring-[#22C55E]/10 transition"
+                              />
+                              <button
+                                onClick={handleVerifyPhone}
+                                disabled={phoneLoading}
+                                className="px-4 py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
+                              >
+                                확인
+                              </button>
+                            </div>
+                          )}
+                          {phoneMsg && (
+                            <p className={`text-xs font-semibold ${phoneMsg.includes('완료') || phoneMsg.includes('발송') ? 'text-[#22C55E]' : 'text-red-500'}`}>{phoneMsg}</p>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    <div className="border-t border-gray-100" />
+                    <div className="border-t border-gray-50" />
 
                     {/* 로그인 기록 */}
                     <div>
-                      <h4 className="font-bold text-gray-800 mb-3 flex justify-between items-center">
-                        최근 로그인 기록
-                        <button onClick={fetchLoginRecords} className="text-xs text-[#22C55E] font-bold underline">새로고침</button>
-                      </h4>
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">최근 로그인 기록</label>
+                        <button onClick={fetchLoginRecords} className="text-xs text-[#22C55E] font-semibold hover:underline">새로고침</button>
+                      </div>
                       {loginRecords.length === 0 ? (
-                        <p className="text-sm text-gray-400 text-center py-4 border border-gray-100 rounded-xl">기록이 없습니다.</p>
+                        <div className="py-6 text-center text-sm text-gray-400 bg-gray-50 rounded-xl">기록이 없습니다.</div>
                       ) : (
-                        <div className="border border-gray-200 rounded-xl overflow-hidden">
-                          <table className="w-full text-sm text-left">
-                            <thead className="bg-gray-50 text-gray-500">
+                        <div className="rounded-xl overflow-hidden border border-gray-100">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-gray-50 text-gray-400">
                               <tr>
-                                <th className="p-3 font-semibold">일시</th>
-                                <th className="p-3 font-semibold">IP / 기기</th>
-                                <th className="p-3 font-semibold">위치</th>
+                                <th className="px-4 py-2.5 font-semibold">일시</th>
+                                <th className="px-4 py-2.5 font-semibold">IP / 기기</th>
+                                <th className="px-4 py-2.5 font-semibold">위치</th>
                               </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-100 text-gray-600">
+                            <tbody className="divide-y divide-gray-50 text-gray-600">
                               {loginRecords.map(r => (
-                                <tr key={r.id}>
-                                  <td className="p-3">{new Date(r.logged_at).toLocaleString('ko-KR')}</td>
-                                  <td className="p-3">
-                                    {r.ip_address}<br />
-                                    <span className="text-xs text-gray-400">{parseUserAgent(r.user_agent)}</span>
+                                <tr key={r.id} className="hover:bg-gray-50/50 transition">
+                                  <td className="px-4 py-3">{new Date(r.logged_at).toLocaleString('ko-KR')}</td>
+                                  <td className="px-4 py-3">
+                                    <span className="font-medium">{r.ip_address}</span><br />
+                                    <span className="text-gray-400">{parseUserAgent(r.user_agent)}</span>
                                   </td>
-                                  <td className="p-3">
+                                  <td className="px-4 py-3 text-gray-500">
                                     {[r.country, r.city].filter(Boolean).join(', ') || '알 수 없음'}
                                   </td>
                                 </tr>
@@ -685,41 +907,39 @@ export default function MyPage() {
                       )}
                     </div>
 
-                    <div className="border-t border-gray-100" />
+                    <div className="border-t border-gray-50" />
 
-                    {/* 기기 기억하기 */}
+                    {/* 신뢰 기기 */}
                     <div>
-                      <h4 className="font-bold text-gray-800 mb-1 flex justify-between items-center">
-                        기기 기억하기
-                        <button onClick={fetchDevices} className="text-xs text-[#22C55E] font-bold underline">새로고침</button>
-                      </h4>
-                      <p className="text-xs text-gray-400 mb-4">
-                        신뢰 기기로 등록하면 로그인 시 2단계 인증을 건너뜁니다. 기기 유형당 1대만 유지됩니다.
-                      </p>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide">신뢰 기기</label>
+                        <button onClick={fetchDevices} className="text-xs text-[#22C55E] font-semibold hover:underline">새로고침</button>
+                      </div>
+                      <p className="text-xs text-gray-400 mb-4">신뢰 기기로 등록하면 로그인 시 MetaMask 2단계 인증을 건너뜁니다.</p>
 
                       {!isCurrentDeviceTrusted && (
                         <button
                           onClick={handleRegisterDevice}
                           disabled={deviceRegisterLoading}
-                          className="mb-4 px-5 py-2.5 bg-[#22C55E] text-white text-sm font-bold rounded-xl hover:bg-[#1ba850] transition disabled:opacity-50"
+                          className="mb-3 px-4 py-2.5 bg-[#22C55E]/10 text-[#22C55E] text-sm font-bold rounded-xl hover:bg-[#22C55E] hover:text-white transition disabled:opacity-50"
                         >
-                          {deviceRegisterLoading ? '등록 중...' : '현재 기기를 신뢰 기기로 등록'}
+                          {deviceRegisterLoading ? '등록 중...' : '현재 기기 신뢰 기기로 등록'}
                         </button>
                       )}
 
                       {devices.length === 0 ? (
-                        <p className="text-sm text-gray-400 py-4 text-center border border-gray-100 rounded-xl">등록된 신뢰 기기가 없습니다.</p>
+                        <div className="py-6 text-center text-sm text-gray-400 bg-gray-50 rounded-xl">등록된 신뢰 기기가 없습니다.</div>
                       ) : (
                         <div className="space-y-2">
                           {devices.map(d => (
-                            <div key={d.id} className="flex justify-between items-center p-4 border border-gray-100 rounded-xl bg-gray-50">
+                            <div key={d.id} className="flex justify-between items-center px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl">
                               <div>
-                                <p className="font-bold text-sm text-gray-800">{d.label}</p>
-                                <p className="text-xs text-gray-400 mt-0.5">IP: {d.ip} · 마지막 사용: {new Date(d.last_used_at).toLocaleString('ko-KR')}</p>
+                                <p className="font-semibold text-sm text-gray-800">{d.label}</p>
+                                <p className="text-xs text-gray-400 mt-0.5">IP {d.ip} · {new Date(d.last_used_at).toLocaleString('ko-KR')}</p>
                               </div>
                               <button
                                 onClick={() => handleRemoveDevice(d.id)}
-                                className="text-xs text-red-400 hover:text-red-600 font-bold bg-white border border-red-200 hover:bg-red-50 px-3 py-1.5 rounded-lg transition"
+                                className="text-xs text-red-400 hover:text-red-600 font-bold bg-white border border-red-100 hover:border-red-300 px-3 py-1.5 rounded-lg transition"
                               >
                                 해제
                               </button>
@@ -734,26 +954,71 @@ export default function MyPage() {
 
               {/* ── 투자 성향 탭 ── */}
               {activeTab === 'investment' && (
-                <div className="space-y-8">
-                  <h3 className="font-black text-xl mb-6">투자 성향 분석 결과</h3>
-                  <div className="max-w-md">
-                    <div className="bg-gray-50 border border-gray-200 rounded-2xl p-8 text-center mb-6">
-                      <p className="text-gray-500 text-sm mb-2">회원님의 현재 투자 유형은</p>
-                      <p className="text-2xl font-bold text-[#22C55E] mb-2">{investmentTypeName}</p>
-                      <p className="text-sm text-gray-600">입니다.</p>
-                    </div>
-                    <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-                      * 투자 성향은 행동 패턴이나 시장 상황에 따라 변경될 수 있습니다. 현재 상황과 맞지 않으면 재설문해 보세요.
-                    </p>
-                    <button
-                      onClick={handleRetakeSurvey}
-                      className="w-full py-4 border-2 border-[#22C55E] text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E]/5 transition flex justify-center items-center gap-2"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                      투자 성향 재설문하기
-                    </button>
+                <div className="space-y-8 max-w-md">
+                  <h3 className="font-black text-xl mb-6">투자 성향 & 계좌 설정</h3>
+
+                  {/* 투자 성향 - 항상 표시 */}
+                  <div>
+                    <h4 className="font-bold text-gray-800 mb-3">투자 성향 분석 결과</h4>
+                    {!isSurveyCompleted ? (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-6 text-center">
+                        <div className="text-3xl mb-2">📋</div>
+                        <p className="font-semibold text-gray-800 mb-1">아직 투자 성향 설문이 완료되지 않았습니다.</p>
+                        <p className="text-xs text-gray-500 mb-4">설문을 완료하면 맞춤형 투자 정보를 제공받을 수 있습니다.</p>
+                        <button
+                          onClick={handleRetakeSurvey}
+                          className="w-full py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm"
+                        >
+                          지금 설문하기
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6 text-center mb-3">
+                          <p className="text-gray-500 text-sm mb-2">회원님의 현재 투자 유형은</p>
+                          <p className="text-2xl font-bold text-[#22C55E] mb-2">{investmentTypeName}</p>
+                          <p className="text-sm text-gray-600">입니다.</p>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+                          * 투자 성향은 행동 패턴이나 시장 상황에 따라 변경될 수 있습니다.
+                        </p>
+                        <button
+                          onClick={handleRetakeSurvey}
+                          className="w-full py-3 border-2 border-[#22C55E] text-[#22C55E] font-bold rounded-xl hover:bg-[#22C55E]/5 transition flex justify-center items-center gap-2 text-sm"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                          투자 성향 재설문하기
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="border-t border-gray-100" />
+
+                  {/* 계좌 설정 - 휴대폰 인증 여부로 게이트 */}
+                  <div>
+                    <h4 className="font-bold text-gray-800 mb-3">
+                      {mode === 'virtual' ? '모의투자 계좌' : '실거래 계좌'}
+                    </h4>
+                    {!userInfo?.is_phone_verified ? (
+                      <div className="space-y-3">
+                        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 text-center">
+                          <div className="text-2xl mb-2">🔐</div>
+                          <p className="font-semibold text-gray-800 text-sm mb-1">계좌 설정을 위해 휴대폰 인증이 필요합니다</p>
+                          <p className="text-xs text-gray-500">보안 및 인증 탭에서 먼저 완료해주세요.</p>
+                        </div>
+                        <button
+                          onClick={() => setActiveTab('security')}
+                          className="w-full py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm"
+                        >
+                          보안 탭으로 이동
+                        </button>
+                      </div>
+                    ) : (
+                      <AccountSection mode={mode} />
+                    )}
                   </div>
                 </div>
               )}
