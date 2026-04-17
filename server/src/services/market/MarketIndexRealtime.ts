@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Server } from 'socket.io'
+import { Server, Socket } from 'socket.io'
 import { getKisAccessToken } from './KisAuth'
 
 const BASE_URL = 'https://openapi.koreainvestment.com:9443'
@@ -7,7 +7,7 @@ const APP_KEY = process.env.KIS_REAL_APP_KEY!
 const APP_SECRET = process.env.KIS_REAL_APP_SECRET!
 
 const KR_POLL_INTERVAL_MS = 5000   // 국내 지수: 5초마다
-const US_POLL_INTERVAL_MS = 60000  // 미국 지수: 1분마다 (15분 지연이라 자주 호출 불필요)
+const US_POLL_INTERVAL_MS = 60000  // 미국 지수: 1분마다
 
 // ─── 장 시간 여부 (KST 09:00 ~ 15:30, 평일) ─────────────────
 
@@ -18,6 +18,11 @@ const isKrMarketOpen = (): boolean => {
     const min = nowKst.getUTCHours() * 60 + nowKst.getUTCMinutes()
     return min >= 9 * 60 && min < 15 * 60 + 30
 }
+
+// ─── 마지막 지수값 캐시 ───────────────────────────────────────
+// 서버 재시작 후 소켓 연결 시 즉시 전송하기 위해 메모리에 유지
+
+const indexCache: Record<string, object> = {}
 
 // ─── KIS API - 국내 지수 현재가 조회 ─────────────────────────
 
@@ -139,7 +144,7 @@ const fetchUsIndex = async (
             open:       meta.regularMarketOpen ?? 0,
             volume:     meta.regularMarketVolume ?? 0,
             market:     'US',
-            delayed:    true,  // Yahoo Finance는 15분 지연
+            delayed:    true,
         }
     } catch (err: any) {
         console.error(`[MarketIndex] ${indexName} Yahoo 조회 오류:`, err.message)
@@ -160,10 +165,7 @@ const US_INDEX_LIST = [
     { yahooSymbol: '%5EDJI',  code: 'DOW',    name: 'DOW' },
 ]
 
-// ─── 실시간 폴링 ─────────────────────────────────────────────
-
-let krPollingTimer: ReturnType<typeof setInterval> | null = null
-let usPollingTimer: ReturnType<typeof setInterval> | null = null
+// ─── 폴링 및 전송 ─────────────────────────────────────────────
 
 const fetchAndEmitKrIndices = async (io: Server): Promise<void> => {
     if (!isKrMarketOpen()) return
@@ -171,6 +173,7 @@ const fetchAndEmitKrIndices = async (io: Server): Promise<void> => {
     for (const index of KR_INDEX_LIST) {
         const result = await fetchKrIndex(index.code, index.name)
         if (result) {
+            indexCache[result.code] = result  // 캐시 저장
             io.emit('index:price', result)
         }
         await new Promise((r) => setTimeout(r, 300))
@@ -181,6 +184,7 @@ const fetchAndEmitUsIndices = async (io: Server): Promise<void> => {
     for (const index of US_INDEX_LIST) {
         const result = await fetchUsIndex(index.yahooSymbol, index.code, index.name)
         if (result) {
+            indexCache[result.code] = result  // 캐시 저장
             io.emit('index:price', result)
             console.log(`[MarketIndex] ${index.name}: ${result.price} (${result.changeRate}%)`)
         }
@@ -188,12 +192,17 @@ const fetchAndEmitUsIndices = async (io: Server): Promise<void> => {
     }
 }
 
+// ─── 실시간 폴링 시작 ─────────────────────────────────────────
+
+let krPollingTimer: ReturnType<typeof setInterval> | null = null
+let usPollingTimer: ReturnType<typeof setInterval> | null = null
+
 export const startMarketIndexRealtime = (io: Server): void => {
     if (krPollingTimer || usPollingTimer) return
 
     console.log('[MarketIndex] 실시간 지수 폴링 시작')
 
-    // 국내 지수: 5초마다
+    // 국내 지수: 5초마다 (장중에만)
     krPollingTimer = setInterval(() => {
         fetchAndEmitKrIndices(io).catch((err) =>
             console.error('[MarketIndex] 국내 지수 폴링 오류:', err.message)
@@ -214,6 +223,15 @@ export const startMarketIndexRealtime = (io: Server): void => {
     fetchAndEmitUsIndices(io).catch((err) =>
         console.error('[MarketIndex] 미국 지수 초기 조회 오류:', err.message)
     )
+
+    // 소켓 연결 시 캐시된 마지막 값 즉시 전송
+    io.on('connection', (socket: Socket) => {
+        if (Object.keys(indexCache).length > 0) {
+            Object.values(indexCache).forEach((data) => {
+                socket.emit('index:price', data)
+            })
+        }
+    })
 }
 
 export const stopMarketIndexRealtime = (): void => {
