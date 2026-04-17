@@ -28,6 +28,7 @@ import { startListedSharesScheduler } from './schedulers/market/ListedShares'
 import { startMinuteCandleScheduler } from './schedulers/market/MinuteCandle'
 import { startStabilityScheduler } from './schedulers/market/Stability'
 import { startKisRealtime } from './services/market/KisRealtime'
+import { startMarketIndexRealtime } from './services/market/MarketIndexRealtime'
 
 
 dotenv.config()
@@ -76,11 +77,11 @@ httpServer.listen(PORT, () => {
     //startMarketIndexScheduler() //미국주요지수
 
 // 2단계
-    startStock52WeekScheduler() //52주 신고가 신저가
-    startForeignAndInstitutionalScheduler() //투자자별 거래량
-    startShortSellingScheduler() //공매도
-    startMinuteCandleScheduler() //일분봉
-    startListedSharesScheduler() //상장주식수
+    //startStock52WeekScheduler() //52주 신고가 신저가
+    //startForeignAndInstitutionalScheduler() //투자자별 거래량
+    //startShortSellingScheduler() //공매도
+    //startMinuteCandleScheduler() //일분봉
+    //startListedSharesScheduler() //상장주식수
 
 // 3단계
     //startStabilityScheduler() //안정성 계산
@@ -89,4 +90,5 @@ httpServer.listen(PORT, () => {
 
     // 실시간 시세
     //startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
+    startMarketIndexRealtime(io)    //코스피, 코스닥, S&P 500, NASDAQ, DOW 실시간 지수
 })
