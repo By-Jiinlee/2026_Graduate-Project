@@ -1,30 +1,13 @@
-import { DataTypes, Model, Optional } from 'sequelize'
+import { DataTypes, Model } from 'sequelize'
 import sequelize from '../../config/database'
 
-interface EcosIndicatorAttributes {
-    id: number
-    indicator: string
-    time_period: string
-    cycle: 'D' | 'M' | 'Q'
-    value: number | null
-    created_at?: Date
-}
-
-type EcosIndicatorCreationAttributes = Optional<
-    EcosIndicatorAttributes,
-    'id' | 'value' | 'created_at'
->
-
-class EcosIndicator
-    extends Model<EcosIndicatorAttributes, EcosIndicatorCreationAttributes>
-    implements EcosIndicatorAttributes
-{
-    public id!: number
-    public indicator!: string
-    public time_period!: string
-    public cycle!: 'D' | 'M' | 'Q'
-    public value!: number | null
-    public created_at!: Date
+class EcosIndicator extends Model {
+    declare id: number
+    declare indicator: string
+    declare time_period: string
+    declare cycle: 'D' | 'M' | 'Q'
+    declare value: number | null
+    declare created_at: Date
 }
 
 EcosIndicator.init(
@@ -43,7 +26,7 @@ EcosIndicator.init(
             allowNull: false,
         },
         cycle: {
-            type: DataTypes.ENUM('D', 'M', 'Q'),
+            type: DataTypes.STRING(1),
             allowNull: false,
         },
         value: {

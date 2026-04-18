@@ -15,11 +15,9 @@ import surveyRouter from './routes/user/surveyRouter'
 // 스케줄러
 import stockPriceRouter from './routes/market/StockPrice'
 import { startStockPriceScheduler } from './schedulers/market/StockPrice'
-import financialStatementRouter from './routes/market/FinancialStatement'
 import { startFinancialStatementScheduler } from './schedulers/market/FinancialStatement'
 import ecosIndicatorRouter from './routes/market/EcosIndicator'
 import { startEcosIndicatorScheduler } from './schedulers/market/EcosIndicator'
-import shortSellingRouter from './routes/market/ShortSelling'
 import { startShortSellingScheduler } from './schedulers/market/ShortSelling'
 import { startStock52WeekScheduler } from './schedulers/market/Stock52Week'
 import { startForeignAndInstitutionalScheduler } from './schedulers/market/ForeignAndInstitutional'
@@ -62,9 +60,7 @@ app.use('/api/survey', surveyRouter)
 
 // 스케줄러 라우터
 app.use('/api/market/stock-prices', stockPriceRouter)
-app.use('/api/market/financial-statements', financialStatementRouter)
 app.use('/api/market/ecos', ecosIndicatorRouter)
-app.use('/api/market/short-selling', shortSellingRouter)
 
 // DB 연결
 connectDB()
@@ -86,7 +82,7 @@ httpServer.listen(PORT, () => {
 // 3단계
     //startStabilityScheduler() //안정성 계산
     //startFinancialStatementScheduler()    //재무제표
-    //startEcosIndicatorScheduler() //거시경제
+    startEcosIndicatorScheduler() //거시경제
 
     // 실시간 시세
     //startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))

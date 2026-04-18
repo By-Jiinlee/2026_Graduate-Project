@@ -15,33 +15,44 @@ interface EcosItem {
 }
 
 interface IndicatorConfig {
-    indicator: string   // 저장할 지표명
-    statCode: string    // ECOS 통계표 코드
-    itemCode1: string   // ECOS 항목 코드
+    indicator: string
+    statCode: string
+    itemCode1: string
     cycle: 'D' | 'M' | 'Q'
 }
 
 // ─── 지표 설정 ────────────────────────────────────────────────
 
 export const DAILY_INDICATORS: IndicatorConfig[] = [
-    { indicator: 'usd_krw', statCode: '731Y001', itemCode1: '0000001', cycle: 'D' },
-    { indicator: 'jpy_krw', statCode: '731Y001', itemCode1: '0000002', cycle: 'D' },
-    { indicator: 'eur_krw', statCode: '731Y001', itemCode1: '0000003', cycle: 'D' },
-    { indicator: 'cny_krw', statCode: '731Y001', itemCode1: '0000004', cycle: 'D' },
+    { indicator: 'base_rate',   statCode: '722Y001', itemCode1: '0101000',   cycle: 'D' },
+    { indicator: 'treasury_3y', statCode: '817Y002', itemCode1: '010200000', cycle: 'D' },
+    { indicator: 'usd_krw',     statCode: '731Y001', itemCode1: '0000001',   cycle: 'D' },
+    { indicator: 'jpy_krw',     statCode: '731Y001', itemCode1: '0000002',   cycle: 'D' },
+    { indicator: 'kospi',       statCode: '802Y001', itemCode1: '0001000',   cycle: 'D' },
+    { indicator: 'kosdaq',      statCode: '802Y001', itemCode1: '0089000',   cycle: 'D' },
 ]
 
 export const MONTHLY_INDICATORS: IndicatorConfig[] = [
-    { indicator: 'base_rate',       statCode: '722Y001', itemCode1: '0101000', cycle: 'M' },
-    { indicator: 'cpi',             statCode: '901Y009', itemCode1: '0',       cycle: 'M' },
-    { indicator: 'unemployment',    statCode: '901Y027', itemCode1: '1',       cycle: 'M' },
-    { indicator: 'm2',              statCode: '101Y002', itemCode1: 'BBHA00',  cycle: 'M' },
-    { indicator: 'current_account', statCode: '301Y013', itemCode1: '10000',   cycle: 'M' },
+    { indicator: 'cpi',                  statCode: '901Y009', itemCode1: '0',      cycle: 'M' },
+    { indicator: 'm2',                   statCode: '161Y008', itemCode1: 'BBGA00', cycle: 'M' },
+    { indicator: 'current_account',      statCode: '301Y013', itemCode1: '000000', cycle: 'M' },
+    { indicator: 'unemployment_rate',    statCode: '901Y027', itemCode1: 'I61BC',  cycle: 'M' },
+    { indicator: 'industrial_production',statCode: '901Y033', itemCode1: 'A00',    cycle: 'M' },
 ]
 
 export const QUARTERLY_INDICATORS: IndicatorConfig[] = [
-    { indicator: 'gdp',        statCode: '200Y001', itemCode1: '10101', cycle: 'Q' },
-    { indicator: 'gdp_growth', statCode: '200Y001', itemCode1: '10102', cycle: 'Q' },
+    { indicator: 'gdp', statCode: '200Y106', itemCode1: '1400', cycle: 'Q' },
 ]
+
+// ─── DB 마지막 저장일 조회 ────────────────────────────────────
+
+export const getLastPeriod = async (indicator: string): Promise<string | null> => {
+    const rows = await sequelize.query<{ last_period: string | null }>(
+        `SELECT MAX(time_period) AS last_period FROM ecos_indicators WHERE indicator = :indicator`,
+        { replacements: { indicator }, type: QueryTypes.SELECT }
+    )
+    return rows[0]?.last_period ?? null
+}
 
 // ─── ECOS API 호출 ────────────────────────────────────────────
 
@@ -56,7 +67,7 @@ export const fetchEcosData = async (
         'json',
         'kr',
         '1',
-        '1000',
+        '100000',
         config.statCode,
         config.cycle,
         startPeriod,
@@ -65,6 +76,12 @@ export const fetchEcosData = async (
     ].join('/')
 
     const res = await axios.get(url)
+
+    if (res.data?.RESULT?.CODE === 'INFO-200') {
+        console.warn(`[EcosIndicator] ${config.indicator} 데이터 없음: ${startPeriod} ~ ${endPeriod}`)
+        return []
+    }
+
     const rows = res.data?.StatisticSearch?.row
     if (!Array.isArray(rows)) return []
 
@@ -86,34 +103,57 @@ export const upsertEcosIndicators = async (items: EcosItem[]): Promise<void> => 
 
     await sequelize.query(
         `INSERT INTO ecos_indicators (indicator, time_period, cycle, value)
-     VALUES ${placeholders}
-     ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+         VALUES ${placeholders}
+         ON DUPLICATE KEY UPDATE value = VALUES(value)`,
         { replacements: flat, type: QueryTypes.INSERT }
     )
 }
 
 // ─── 날짜 유틸 ────────────────────────────────────────────────
 
-export const getDateRange = (cycle: 'D' | 'M' | 'Q', monthsBack: number = 3) => {
+// 마지막 저장일 기준으로 시작일 계산
+export const getStartPeriod = (lastPeriod: string | null, cycle: 'D' | 'M' | 'Q'): string => {
     const now = new Date()
 
+    if (!lastPeriod) {
+        // 처음 수집: 10년치
+        const start = new Date(now)
+        start.setFullYear(start.getFullYear() - 10)
+
+        if (cycle === 'D') {
+            return `${start.getFullYear()}${String(start.getMonth() + 1).padStart(2, '0')}${String(start.getDate()).padStart(2, '0')}`
+        }
+        if (cycle === 'M') {
+            return `${start.getFullYear()}${String(start.getMonth() + 1).padStart(2, '0')}`
+        }
+        return `${start.getFullYear()}Q1`
+    }
+
+    // 마지막 저장일 다음날부터
     if (cycle === 'D') {
-        const start = new Date(now)
-        start.setMonth(start.getMonth() - monthsBack)
-        const fmt = (d: Date) =>
-            `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-        return { startPeriod: fmt(start), endPeriod: fmt(now) }
+        const d = new Date(`${lastPeriod.slice(0, 4)}-${lastPeriod.slice(4, 6)}-${lastPeriod.slice(6, 8)}`)
+        d.setDate(d.getDate() + 1)
+        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
     }
-
     if (cycle === 'M') {
-        const start = new Date(now)
-        start.setMonth(start.getMonth() - monthsBack)
-        const fmt = (d: Date) =>
-            `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`
-        return { startPeriod: fmt(start), endPeriod: fmt(now) }
+        const d = new Date(`${lastPeriod.slice(0, 4)}-${lastPeriod.slice(4, 6)}-01`)
+        d.setMonth(d.getMonth() + 1)
+        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`
     }
-
     // Q
-    const startYear = now.getFullYear() - 2
-    return { startPeriod: `${startYear}Q1`, endPeriod: `${now.getFullYear()}Q4` }
+    const year = parseInt(lastPeriod.slice(0, 4))
+    const quarter = parseInt(lastPeriod.slice(5))
+    if (quarter === 4) return `${year + 1}Q1`
+    return `${year}Q${quarter + 1}`
+}
+
+export const getEndPeriod = (cycle: 'D' | 'M' | 'Q'): string => {
+    const now = new Date()
+    if (cycle === 'D') {
+        return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+    }
+    if (cycle === 'M') {
+        return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
+    }
+    return `${now.getFullYear()}Q${Math.ceil((now.getMonth() + 1) / 3)}`
 }
