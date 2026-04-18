@@ -3,7 +3,7 @@ import { QueryTypes } from 'sequelize';
 import sequelize from '../../config/database';
 import StockPrice from '../../models/market/StockPrice';
 import { collectStockPrices } from '../../schedulers/market/StockPrice';
-import { priceMap, getRealtimeStatus } from '../../services/market/KisRealtime';
+import { priceMap, changeMap, changeRateMap, getRealtimeStatus } from '../../services/market/KisRealtime';
 import { fetchDayCandles, upsertMinuteCandles } from '../../services/market/MinuteCandle';
 
 /**
@@ -26,11 +26,18 @@ export const getAllLatestPrices = async (_req: Request, res: Response): Promise<
                      ELSE s.market
                 END AS type,
                 sp.close AS price,
-                (sp.close - sp.open) AS \`change\`,
-                ((sp.close - sp.open) / sp.open * 100) AS changeRate,
+                COALESCE(sp.close - sp_prev.close, 0) AS \`change\`,
+                CASE WHEN COALESCE(sp_prev.close, 0) > 0
+                     THEN (sp.close - sp_prev.close) / sp_prev.close * 100
+                     ELSE 0 END AS changeRate,
                 sp.volume
             FROM stocks s
             JOIN stock_prices sp ON s.id = sp.stock_id
+            LEFT JOIN stock_prices sp_prev ON sp_prev.stock_id = s.id
+                AND sp_prev.price_date = (
+                    SELECT MAX(p.price_date) FROM stock_prices p
+                    WHERE p.stock_id = s.id AND p.price_date < sp.price_date
+                )
             WHERE sp.price_date = (
                 SELECT price_date FROM stock_prices
                 GROUP BY price_date
@@ -39,21 +46,20 @@ export const getAllLatestPrices = async (_req: Request, res: Response): Promise<
             )
               AND s.is_active = 1
               AND s.market IN ('KOSPI', 'KOSDAQ')
-            ORDER BY sp.volume DESC;
         `;
 
         const latestPrices = await sequelize.query(query, {
             type: QueryTypes.SELECT
         });
 
-        // 실시간 시세가 있으면 덮어씌우기
+        // 실시간 시세가 있으면 가격/전일대비 모두 덮어씌우기
         const merged = (latestPrices as any[]).map(row => {
             const live = priceMap.get(row.code)
-            if (live != null) {
-                const open = Number(row.price) - Number(row.change)
-                const change = live - open
-                const changeRate = open !== 0 ? (change / open) * 100 : 0
-                return { ...row, price: live, change, changeRate }
+            if (live != null) return {
+                ...row,
+                price:      live,
+                change:     changeMap.get(row.code)     ?? row.change,
+                changeRate: changeRateMap.get(row.code) ?? row.changeRate,
             }
             return row
         })
@@ -114,11 +120,18 @@ export const getStockDetail = async (req: Request, res: Response): Promise<void>
                          ELSE s.market
                     END AS type,
                     sp.close AS price,
-                    (sp.close - sp.open) AS \`change\`,
-                    ((sp.close - sp.open) / sp.open * 100) AS changeRate,
+                    COALESCE(sp.close - sp_prev.close, 0) AS \`change\`,
+                    CASE WHEN COALESCE(sp_prev.close, 0) > 0
+                         THEN (sp.close - sp_prev.close) / sp_prev.close * 100
+                         ELSE 0 END AS changeRate,
                     sp.volume
              FROM stocks s
              JOIN stock_prices sp ON s.id = sp.stock_id
+             LEFT JOIN stock_prices sp_prev ON sp_prev.stock_id = s.id
+                 AND sp_prev.price_date = (
+                     SELECT MAX(p.price_date) FROM stock_prices p
+                     WHERE p.stock_id = :stockId AND p.price_date < sp.price_date
+                 )
              WHERE s.id = :stockId
                AND sp.price_date = (SELECT MAX(price_date) FROM stock_prices WHERE stock_id = :stockId)`,
             { replacements: { stockId }, type: QueryTypes.SELECT }
@@ -140,13 +153,12 @@ export const getStockDetail = async (req: Request, res: Response): Promise<void>
 
         if (!info) { res.status(404).json({ success: false, message: '종목을 찾을 수 없습니다' }); return }
 
-        // 실시간 시세가 있으면 덮어씌우기
+        // 실시간 시세가 있으면 가격/전일대비 모두 덮어씌우기
         const live = priceMap.get(info.code)
         if (live != null) {
-            const open = Number(info.price) - Number(info.change)
-            info.price = live
-            info.change = live - open
-            info.changeRate = open !== 0 ? ((live - open) / open) * 100 : 0
+            info.price      = live
+            info.change     = changeMap.get(info.code)     ?? info.change
+            info.changeRate = changeRateMap.get(info.code) ?? info.changeRate
         }
 
         res.json({ success: true, info, candles })

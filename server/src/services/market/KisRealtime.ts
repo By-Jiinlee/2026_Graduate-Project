@@ -10,14 +10,18 @@ const BASE_URL      = 'https://openapi.koreainvestment.com:9443'
 const APP_KEY       = process.env.KIS_REAL_APP_KEY!
 const APP_SECRET    = process.env.KIS_REAL_APP_SECRET!
 
-const CRAWL_DELAY_MS    = 70    // 장 중 크롤링 딜레이 (~14 req/s, 한도 20 대비 여유)
-const OVERTIME_DELAY_MS = 300   // 시간외 크롤링 딜레이 (~3 req/s, 느긋하게)
+const CRAWL_BATCH_SIZE      = 20   // 병렬 배치 크기 (KIS rate limit 20 req/s 기준)
+const CRAWL_BATCH_INTERVAL  = 600  // 배치 간 최소 간격 ms (장 중, ~33 req/s 이내)
+const OVERTIME_BATCH_INTERVAL = 2000 // 시간외 배치 간격 ms
 const POLL_INTERVAL_MS  = 1000  // 온디맨드 폴링 주기 (장 중/시간외 공통 1s, 종목 1개라 부담 없음)
 
-const FULL_CRAWL_ENABLED = process.env.ENABLE_FULL_CRAWL !== 'false'
+// 기본값 false — 전종목 크롤링은 ENABLE_FULL_CRAWL=true 로 명시 활성화
+const FULL_CRAWL_ENABLED = process.env.ENABLE_FULL_CRAWL === 'true'
 
 // ─── 서버 가격 스냅샷 ────────────────────────────────────────
-export const priceMap = new Map<string, number>()
+export const priceMap      = new Map<string, number>()
+export const changeMap     = new Map<string, number>()
+export const changeRateMap = new Map<string, number>()
 
 // ─── priceMap 영속화 (재시작 시 복원) ────────────────────────
 const CACHE_PATH = path.join(__dirname, '../../../cache/priceCache.json')
@@ -222,54 +226,67 @@ const startFullCrawler = async (io: Server): Promise<void> => {
             continue
         }
 
-        const label    = getTimeZoneLabel()
-        const delay    = market ? CRAWL_DELAY_MS : OVERTIME_DELAY_MS
-        const cycleStart = Date.now()
-        console.log(`\n[KisCrawler] ━━━ 사이클 시작 (${label}) ━━━ ${stocks.length}개 / ${new Date().toLocaleTimeString('ko-KR')}`)
+        const label       = getTimeZoneLabel()
+        const batchInterval = market ? CRAWL_BATCH_INTERVAL : OVERTIME_BATCH_INTERVAL
+        const cycleStart  = Date.now()
+        const totalBatches = Math.ceil(stocks.length / CRAWL_BATCH_SIZE)
+        console.log(`\n[KisCrawler] ━━━ 사이클 시작 (${label}) ━━━ ${stocks.length}개 / ${totalBatches}배치 / ${new Date().toLocaleTimeString('ko-KR')}`)
 
         let updated = 0, changed = 0, rateLimitHits = 0
 
-        for (let i = 0; i < stocks.length; i++) {
-            const stock = stocks[i]
-
-            // 시간대 전환 감지 → 현재 사이클 중단, 다음 루프에서 새 시간대로 시작
+        for (let i = 0; i < stocks.length; i += CRAWL_BATCH_SIZE) {
+            // 시간대 전환 감지 → 사이클 중단
             const stillValid = market ? isMarketOpen() : isOvertimeOpen()
             if (!stillValid) {
                 console.log(`[KisCrawler] 시간대 전환 감지 (${label} 종료) — ${i}번째에서 중단`)
                 break
             }
 
-            const prevPrice = priceMap.get(stock.code)
-            const result    = await fetchPrice(stock.code)
+            const batch      = stocks.slice(i, i + CRAWL_BATCH_SIZE)
+            const batchStart = Date.now()
 
-            if (result === 'RATE_LIMIT') {
-                rateLimitHits++
-                if (rateLimitHits <= 3) console.warn(`[KisCrawler] ⚠ Rate limit — ${i + 1}번째 종목 — 2초 대기`)
-                await sleep(2000)
-                continue
+            // 배치 병렬 요청
+            const results = await Promise.all(batch.map(s => fetchPrice(s.code)))
+
+            for (let j = 0; j < batch.length; j++) {
+                const result = results[j]
+                const stock  = batch[j]
+
+                if (result === 'RATE_LIMIT') {
+                    rateLimitHits++
+                    if (rateLimitHits <= 3) console.warn(`[KisCrawler] ⚠ Rate limit — ${stock.code} — 3초 대기`)
+                    await sleep(3000)
+                    break
+                }
+
+                if (result) {
+                    if (priceMap.get(stock.code) !== result.price) changed++
+                    priceMap.set(result.code, result.price)
+                    changeMap.set(result.code, result.change)
+                    changeRateMap.set(result.code, result.changeRate)
+                    io.emit('stock:price', result)
+                    updated++
+                }
             }
 
-            if (result) {
-                if (prevPrice !== result.price) changed++
-                priceMap.set(result.code, result.price)
-                io.emit('stock:price', result)
-                updated++
-                rateLimitHits = 0
+            // 첫 배치 로그
+            if (i === 0) {
+                const sample = results.filter(r => r && r !== 'RATE_LIMIT').slice(0, 3)
+                    .map(r => r && r !== 'RATE_LIMIT' ? `${r.code}=${r.price}` : '').join(' ')
+                console.log(`[KisCrawler] 첫 배치 샘플: ${sample}`)
             }
 
-            // 처음 5개: 초기 확인 로그
-            if (i < 5) {
-                const status = result ? `✓ ${result.price}원` : '✗ null'
-                console.log(`[KisCrawler] [${i + 1}/5] ${stock.code} → ${status}`)
-            }
-
-            // 300개마다 진행 로그
-            if (i >= 5 && (i + 1) % 300 === 0) {
+            // 500개마다 진행 로그
+            const processed = i + batch.length
+            if (processed % 500 < CRAWL_BATCH_SIZE) {
                 const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(0)
-                console.log(`[KisCrawler] 진행 ${i + 1}/${stocks.length} (${elapsed}s) | 업데이트 ${updated}개`)
+                console.log(`[KisCrawler] 진행 ${processed}/${stocks.length} (${elapsed}s) | 업데이트 ${updated}개`)
             }
 
-            await sleep(delay)
+            // 배치 간 최소 간격 보장
+            const batchElapsed = Date.now() - batchStart
+            const wait = Math.max(0, batchInterval - batchElapsed)
+            if (wait > 0 && i + CRAWL_BATCH_SIZE < stocks.length) await sleep(wait)
         }
 
         const elapsed = ((Date.now() - cycleStart) / 1000).toFixed(1)
@@ -290,6 +307,8 @@ const doFetch = async (code: string, io: Server) => {
     const result = await fetchPrice(code)
     if (result && typeof result !== 'string') {
         priceMap.set(result.code, result.price)
+        changeMap.set(result.code, result.change)
+        changeRateMap.set(result.code, result.changeRate)
         io.emit('stock:price', result)
     }
 }

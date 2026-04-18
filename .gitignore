@@ -35,3 +35,4 @@ build/
 # Claude Code
 CLAUDE.md
 CLAUDE.local.md
+server/cache/*.json

@@ -18,6 +18,21 @@ export const setPin = async (req: Request, res: Response) => {
   }
 }
 
+// ─── PIN 변경 ─────────────────────────────────────────────────
+
+export const changePin = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { oldPin, newPin } = req.body
+    if (!oldPin || !newPin) return res.status(400).json({ message: '현재 PIN과 새 PIN을 입력해주세요' })
+
+    await tradeService.changePin(userId, oldPin, newPin)
+    res.json({ message: 'PIN이 변경되었습니다' })
+  } catch (err: any) {
+    res.status(400).json({ message: err.message })
+  }
+}
+
 // ─── 계좌 개설 ────────────────────────────────────────────────
 
 export const openAccount = async (req: Request, res: Response) => {
@@ -32,6 +47,22 @@ export const openAccount = async (req: Request, res: Response) => {
       message: '모의투자 계좌가 개설되었습니다',
       balance: Number(account.seed_balance),
     })
+  } catch (err: any) {
+    res.status(400).json({ message: err.message })
+  }
+}
+
+// ─── 계좌 리셋 ────────────────────────────────────────────────
+
+export const resetAccount = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const { pin } = req.body
+    if (!pin) return res.status(400).json({ message: 'PIN을 입력해주세요' })
+
+    await tradeService.verifyPin(userId, pin)
+    await tradeService.resetAccount(userId)
+    res.json({ message: '계좌가 초기화되었습니다' })
   } catch (err: any) {
     res.status(400).json({ message: err.message })
   }
@@ -76,8 +107,9 @@ export const buyStock = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'],
     })
 
+    const msg = orderType === 'market' ? '매수가 완료되었습니다' : '매수 지정가 주문이 접수되었습니다'
     res.json({
-      message: '매수가 완료되었습니다',
+      message: msg,
       orderId: result.order.id,
       remainingBalance: result.remainingBalance,
     })
@@ -125,11 +157,39 @@ export const sellStock = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'],
     })
 
+    const msg = orderType === 'market' ? '매도가 완료되었습니다' : '매도 지정가 주문이 접수되었습니다'
     res.json({
-      message: '매도가 완료되었습니다',
+      message: msg,
       orderId: result.order.id,
       remainingBalance: result.remainingBalance,
     })
+  } catch (err: any) {
+    res.status(400).json({ message: err.message })
+  }
+}
+
+// ─── 미체결 주문 조회 ─────────────────────────────────────────
+
+export const getPendingOrders = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const orders = await tradeService.getPendingOrders(userId)
+    res.json(orders)
+  } catch (err: any) {
+    res.status(500).json({ message: err.message })
+  }
+}
+
+// ─── 미체결 주문 취소 ─────────────────────────────────────────
+
+export const cancelOrder = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const orderId = Number(req.params.orderId)
+    if (!orderId) return res.status(400).json({ message: '유효하지 않은 주문 ID입니다' })
+
+    await tradeService.cancelOrder(userId, orderId)
+    res.json({ message: '주문이 취소되었습니다' })
   } catch (err: any) {
     res.status(400).json({ message: err.message })
   }

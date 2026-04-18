@@ -27,6 +27,7 @@ import { startMinuteCandleScheduler } from './schedulers/market/MinuteCandle'
 import { startStabilityScheduler } from './schedulers/market/Stability'
 import { startKisRealtime } from './services/market/KisRealtime'
 import { startMarketIndexRealtime } from './services/market/MarketIndexRealtime'
+import { startLimitOrderScheduler } from './schedulers/trade/limitOrderScheduler'
 
 
 dotenv.config()
@@ -84,7 +85,10 @@ httpServer.listen(PORT, () => {
     //startFinancialStatementScheduler()    //재무제표
     startEcosIndicatorScheduler() //거시경제
 
-    // 실시간 시세
-    //startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
-    startMarketIndexRealtime(io)    //코스피, 코스닥, S&P 500, NASDAQ, DOW 실시간 지수
+    // 실시간 시세 (온디맨드 폴링 항상 활성, 전종목 크롤링은 ENABLE_FULL_CRAWL=true 필요)
+    startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
+    startMarketIndexRealtime(io)        // 코스피, 코스닥, S&P 500, NASDAQ, DOW 실시간 지수
+
+    // 지정가 체결 스케줄러 (항상 활성)
+    startLimitOrderScheduler()
 })
