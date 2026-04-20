@@ -47,6 +47,7 @@ app.use(express.urlencoded({ extended: true }))
 app.use(cookieParser())
 app.use(morgan('dev'))
 app.use(helmet())
+app.set('trust proxy', true) // 이상탐지 테스트용
 app.use(cors({
     origin: 'http://localhost:5173',
     credentials: true,

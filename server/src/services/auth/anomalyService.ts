@@ -1,3 +1,4 @@
+console.log('[anomalyService] 로드됨') // ← 파일 최상단에 추가
 import { Op, literal } from 'sequelize'
 import AnomalyLog, { AnomalyType, AnomalyAction } from '../../models/auth/AnomalyLog'
 import LoginAttempt from '../../models/auth/LoginAttempt'

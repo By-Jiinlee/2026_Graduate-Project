@@ -77,7 +77,7 @@ router.delete('/withdraw', isAuthenticated, authController.withdraw)
 // ─── 토큰 갱신 ───────────────────────────────────────────────
 router.post('/refresh', authController.refreshToken)
 
-export default router
+
 // ─── 마이페이지 휴대폰 인증 ───────────────────────────────────
 router.post('/phone/send', isAuthenticated, smsCodeRateLimiter, validateSmsCode, authController.sendPhoneCode)
 router.post('/phone/verify', isAuthenticated, smsCodeRateLimiter, validateSmsCode, authController.verifyPhoneCode)
@@ -100,4 +100,6 @@ router.delete('/devices/:deviceId', isAuthenticated, authController.removeTruste
 
 // ─── 거래 nonce 조회 (고액 거래 MetaMask 서명용) ──────────────
 router.get('/trade-nonce', isAuthenticated, authController.getTradeNonce)
+
+export default router
 

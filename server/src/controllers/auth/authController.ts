@@ -1,4 +1,4 @@
-import { Request, Response } from 'express'
+import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import * as authService from '../../services/auth/authService'
 import {
@@ -12,6 +12,7 @@ import {
 import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
 import Wallet from '../../models/user/Wallet'
 import User from '../../models/user/User'
+import { nextTick } from 'node:process'
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 
@@ -115,12 +116,12 @@ export const register = async (req: Request, res: Response) => {
 // ─── 로그인 1단계 ─────────────────────────────────────────────
 
 // 1단계: 이메일 + 비밀번호 검증 → nonce 반환
-export const loginStep1 = async (req: Request, res: Response) => {
+export const loginStep1 = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { email, password } = req.body
     const result = await authService.loginStep1(email, password)
 
-    // ↓ 추가: 신뢰 기기 확인
+    // 신뢰 기기 확인
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
     const userAgent = req.headers['user-agent'] || 'unknown'
     const rawDeviceToken = req.cookies[DEVICE_COOKIE_NAME]
@@ -129,29 +130,43 @@ export const loginStep1 = async (req: Request, res: Response) => {
       isTrustedDevice = await verifyTrustedDevice(result.userId, rawDeviceToken, userAgent, ip)
     }
 
-    // ↓ 추가: 이상탐지 미들웨어를 위한 locals 설정
+    // 이상탐지 미들웨어를 위한 locals 설정
     res.locals.loginSuccess = true
     res.locals.loginEmail = email
     res.locals.loginUserId = result.userId
 
-    return res.status(200).json({
+    res.locals.responseData = {
       message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
       userId: result.userId,
       walletAddress: result.walletAddress,
       nonce: result.nonce,
-      isTrustedDevice,            // ↓ 추가
-      requireWalletSign: !isTrustedDevice, // ↓ 추가
-    })
+      isTrustedDevice,
+      requireWalletSign: !isTrustedDevice,
+    }
+    res.locals.responseStatus = 200
+    return next()
+
+    // return res.status(200).json({
+    //   message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
+    //   userId: result.userId,
+    //   walletAddress: result.walletAddress,
+    //   nonce: result.nonce,
+    //   isTrustedDevice,
+    //   requireWalletSign: !isTrustedDevice,
+    // })
   } catch (error: any) {
     // ↓ 추가: 실패도 이상탐지 미들웨어에 전달
     res.locals.loginSuccess = false
     res.locals.loginEmail = req.body.email
-    return res.status(400).json({ message: error.message })
+    res.locals.responseData = { message: error.message }
+    res.locals.responseStatus = 400
+    return next()
+    //return res.status(400).json({ message: error.message })
   }
 }
 
 // 2단계: 지갑 서명 검증 → JWT 발급
-export const loginStep2 = async (req: Request, res: Response) => {
+export const loginStep2 = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userId, walletAddress, signature, rememberDevice, skipSignature } = req.body // ↓ rememberDevice, skipSignature 추가
 
@@ -168,7 +183,7 @@ export const loginStep2 = async (req: Request, res: Response) => {
       signature,
       ip,
       userAgent,
-      skipSignature, // ↓ 추가
+      skipSignature,
     )
 
     res.cookie('accessToken', accessToken, {
@@ -192,7 +207,7 @@ export const loginStep2 = async (req: Request, res: Response) => {
       maxAge: 1000 * 60 * 10, // 10분
     })
 
-    // ↓ 추가: 기기 기억하기
+    // 기기 기억하기
     if (rememberDevice) {
       const rawDeviceToken = await registerTrustedDevice(userId, userAgent, ip)
       res.cookie(DEVICE_COOKIE_NAME, rawDeviceToken, {
@@ -203,12 +218,13 @@ export const loginStep2 = async (req: Request, res: Response) => {
       })
     }
 
-    // ↓ 추가: 이상탐지 미들웨어를 위한 locals 설정
+    // 이상탐지 미들웨어를 위한 locals 설정
     res.locals.loginSuccess = true
     res.locals.loginEmail = user.email
     res.locals.loginUserId = user.id
 
-    return res.status(200).json({
+    // return res.status(200).json({
+    res.locals.responseData = {
       message: '로그인 성공',
       user: {
         id: user.id,
@@ -217,11 +233,16 @@ export const loginStep2 = async (req: Request, res: Response) => {
         role: user.role,
         walletAddress,
       },
-    })
+    }
+    res.locals.resopnseStatus = 200
+    return next() // <- analyzeAfterLogin 으로 넘김
   } catch (error: any) {
     res.locals.loginSuccess = false
     res.locals.loginEmail = req.body.email ?? ''
-    return res.status(400).json({ message: error.message })
+    res.locals.responseData = { message: error.message }
+    res.locals.responseStatus = 400
+    return next()
+    //return res.status(400).json({ message: error.message })
   }
 }
 
