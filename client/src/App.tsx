@@ -85,8 +85,8 @@ const SurveyGuard = ({ children }: { children: React.ReactNode }) => {
   const userStr = localStorage.getItem('upTick_user')
   const user = userStr ? JSON.parse(userStr) : {}
 
-  // 설문을 완료하지 않았다면 무조건 /survey 로 강제 이동
-  if (!user.is_survey_completed) {
+  // 설문 미완료 + skip도 안 했으면 /survey 강제 이동
+  if (!user.is_survey_completed && !user.survey_skipped) {
     return <Navigate to="/survey" replace />
   }
 
@@ -100,17 +100,17 @@ function App() {
       <Routes>
         {/* 비로그인 접근 가능 영역 */}
         <Route path="/" element={<LandingPage />} />
-        <Route path="/stock" element={<StockList />} />
-        <Route path="/stocks" element={<StockList />} />
-        <Route path="/about" element={<About />} />
-        <Route path="/stock/:stockId" element={<StockDetail />} />
         <Route path="/register" element={<Register />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/about" element={<About />} />
+        <Route path="/stock" element={<StockList />} />
+        <Route path="/stocks" element={<StockList />} />
 
-        {/* 💡 로그인은 필요하지만, 설문 완료 전에도 접근 가능한 유일한 곳 = 설문 페이지 */}
+        {/* 로그인 필요, 설문 완료 전에도 접근 가능 */}
         <Route path="/survey" element={<ProtectedRoute><Survey /></ProtectedRoute>} />
 
-        {/* 로그인 AND 설문까지 모두 완료해야 접근 가능한 영역들 (이중 감싸기) */}
+        {/* 로그인 AND 설문까지 모두 완료해야 접근 가능한 영역들 */}
+        <Route path="/stock/:stockId" element={<ProtectedRoute><SurveyGuard><StockDetail /></SurveyGuard></ProtectedRoute>} />
         <Route path="/manage" element={<ProtectedRoute><SurveyGuard><Dashboard /></SurveyGuard></ProtectedRoute>} />
         <Route path="/dashboard" element={<ProtectedRoute><SurveyGuard><Dashboard /></SurveyGuard></ProtectedRoute>} />
         <Route path="/community" element={<ProtectedRoute><SurveyGuard><Community /></SurveyGuard></ProtectedRoute>} />

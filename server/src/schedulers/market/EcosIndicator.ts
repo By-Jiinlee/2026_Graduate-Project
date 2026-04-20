@@ -2,22 +2,40 @@ import cron from 'node-cron'
 import {
     fetchEcosData,
     upsertEcosIndicators,
+    getLastPeriod,
+    getStartPeriod,
+    getEndPeriod,
     DAILY_INDICATORS,
     MONTHLY_INDICATORS,
     QUARTERLY_INDICATORS,
-    getDateRange,
 } from '../../services/market/EcosIndicator'
 
 // ─── 일별 수집 ────────────────────────────────────────────────
 
 export const collectDailyIndicators = async (): Promise<void> => {
     console.log('[EcosIndicator] 일별 수집 시작')
-    const { startPeriod, endPeriod } = getDateRange('D', 1)
+
+    const endPeriod = getEndPeriod('D')
 
     for (const config of DAILY_INDICATORS) {
         try {
+            const lastPeriod = await getLastPeriod(config.indicator)
+            const startPeriod = getStartPeriod(lastPeriod, 'D')
+
+            if (startPeriod > endPeriod) {
+                console.log(`[EcosIndicator] ${config.indicator} 최신 상태`)
+                continue
+            }
+
+            console.log(`[EcosIndicator] ${config.indicator} 수집 중 (${startPeriod} ~ ${endPeriod})`)
             const items = await fetchEcosData(config, startPeriod, endPeriod)
-            await upsertEcosIndicators(items)
+
+            if (items.length > 0) {
+                await upsertEcosIndicators(items)
+                console.log(`[EcosIndicator] ${config.indicator} ${items.length}건 저장`)
+            } else {
+                console.warn(`[EcosIndicator] ${config.indicator} 데이터 없음`)
+            }
         } catch (err) {
             console.error(`[EcosIndicator] 일별 오류 - ${config.indicator}:`, err)
         }
@@ -29,12 +47,28 @@ export const collectDailyIndicators = async (): Promise<void> => {
 
 export const collectMonthlyIndicators = async (): Promise<void> => {
     console.log('[EcosIndicator] 월별 수집 시작')
-    const { startPeriod, endPeriod } = getDateRange('M', 3)
+
+    const endPeriod = getEndPeriod('M')
 
     for (const config of MONTHLY_INDICATORS) {
         try {
+            const lastPeriod = await getLastPeriod(config.indicator)
+            const startPeriod = getStartPeriod(lastPeriod, 'M')
+
+            if (startPeriod > endPeriod) {
+                console.log(`[EcosIndicator] ${config.indicator} 최신 상태`)
+                continue
+            }
+
+            console.log(`[EcosIndicator] ${config.indicator} 수집 중 (${startPeriod} ~ ${endPeriod})`)
             const items = await fetchEcosData(config, startPeriod, endPeriod)
-            await upsertEcosIndicators(items)
+
+            if (items.length > 0) {
+                await upsertEcosIndicators(items)
+                console.log(`[EcosIndicator] ${config.indicator} ${items.length}건 저장`)
+            } else {
+                console.warn(`[EcosIndicator] ${config.indicator} 데이터 없음`)
+            }
         } catch (err) {
             console.error(`[EcosIndicator] 월별 오류 - ${config.indicator}:`, err)
         }
@@ -46,12 +80,28 @@ export const collectMonthlyIndicators = async (): Promise<void> => {
 
 export const collectQuarterlyIndicators = async (): Promise<void> => {
     console.log('[EcosIndicator] 분기별 수집 시작')
-    const { startPeriod, endPeriod } = getDateRange('Q')
+
+    const endPeriod = getEndPeriod('Q')
 
     for (const config of QUARTERLY_INDICATORS) {
         try {
+            const lastPeriod = await getLastPeriod(config.indicator)
+            const startPeriod = getStartPeriod(lastPeriod, 'Q')
+
+            if (startPeriod > endPeriod) {
+                console.log(`[EcosIndicator] ${config.indicator} 최신 상태`)
+                continue
+            }
+
+            console.log(`[EcosIndicator] ${config.indicator} 수집 중 (${startPeriod} ~ ${endPeriod})`)
             const items = await fetchEcosData(config, startPeriod, endPeriod)
-            await upsertEcosIndicators(items)
+
+            if (items.length > 0) {
+                await upsertEcosIndicators(items)
+                console.log(`[EcosIndicator] ${config.indicator} ${items.length}건 저장`)
+            } else {
+                console.warn(`[EcosIndicator] ${config.indicator} 데이터 없음`)
+            }
         } catch (err) {
             console.error(`[EcosIndicator] 분기별 오류 - ${config.indicator}:`, err)
         }

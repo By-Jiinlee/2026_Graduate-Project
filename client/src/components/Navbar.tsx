@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { useTradeModeStore } from '../store/tradeModeStore'
+import { useProfileStore } from '../store/profileStore'
 
 const checkLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
@@ -15,6 +16,7 @@ export default function Navbar() {
   const navigate = useNavigate()
   const [loggedIn, setLoggedIn] = useState(checkLoggedIn())
   const { mode, setMode, reset: resetMode } = useTradeModeStore()
+  const { profileImage } = useProfileStore()
   const [remaining, setRemaining] = useState(getSessionRemaining())
   const [showWarning, setShowWarning] = useState(false)
 
@@ -204,10 +206,13 @@ export default function Navbar() {
                 )}
                 <Link
                   to="/mypage"
-                  className="w-10 h-10 rounded-full bg-[#22C55E] flex items-center justify-center text-white font-bold hover:bg-[#16A34A] transition"
+                  className="w-10 h-10 rounded-full bg-[#22C55E] flex items-center justify-center text-white font-bold hover:bg-[#16A34A] transition overflow-hidden"
                   title="마이페이지"
                 >
-                  👤
+                  {profileImage
+                    ? <img src={profileImage} alt="프로필" className="w-full h-full object-cover" />
+                    : <span>👤</span>
+                  }
                 </Link>
                 <button
                   onClick={handleLogout}

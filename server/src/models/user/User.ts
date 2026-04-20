@@ -25,9 +25,11 @@ interface UserAttributes {
   email_changed_at?: Date | null
   is_phone_verified: boolean
   pin_hash?: string | null
+  is_survey_completed: boolean
+  investment_type_id?: number | null
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'is_survey_completed' | 'investment_type_id'> {}
 
 class User
   extends Model<UserAttributes, UserCreationAttributes>
@@ -45,6 +47,8 @@ class User
   public is_phone_verified!: boolean
   public email_changed_at?: Date | null
   public pin_hash?: string | null
+  public is_survey_completed!: boolean
+  public investment_type_id?: number | null
   public status!: 'active' | 'dormant' | 'withdrawn'
   public terms_agreed!: boolean
   public privacy_agreed!: boolean
@@ -85,6 +89,8 @@ User.init(
     is_phone_verified: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
     email_changed_at: { type: DataTypes.DATE, allowNull: true },
     pin_hash: { type: DataTypes.STRING(255), allowNull: true },
+    is_survey_completed: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
+    investment_type_id: { type: DataTypes.INTEGER, allowNull: true },
     terms_agreed: {
       type: DataTypes.TINYINT,
       allowNull: false,

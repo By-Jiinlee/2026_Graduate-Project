@@ -324,7 +324,10 @@ export default function StockDetail() {
         if (!info) return
         const socket = io('http://localhost:3000')
         socketRef.current = socket
-        socket.emit('subscribe:stock', info.code)
+
+        // 연결/재연결 시 구독 재등록
+        socket.on('connect', () => socket.emit('subscribe:stock', info.code))
+        if (socket.connected) socket.emit('subscribe:stock', info.code)
 
         socket.on('stock:price', (data: {
             code: string; price: number; change: number

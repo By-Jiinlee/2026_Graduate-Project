@@ -1,7 +1,73 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { io, Socket } from 'socket.io-client'
+
+// ─── 타입 ─────────────────────────────────────────────────────
+
+interface IndexData {
+  code: string
+  name: string
+  price: number
+  change: number
+  changeRate: number
+  market: 'KR' | 'US'
+  delayed?: boolean
+}
+
+// ─── 초기 지수 데이터 ─────────────────────────────────────────
+
+const INITIAL_INDICES: Record<string, IndexData> = {
+  '0001':   { code: '0001',   name: 'KOSPI',   price: 0, change: 0, changeRate: 0, market: 'KR' },
+  '1001':   { code: '1001',   name: 'KOSDAQ',  price: 0, change: 0, changeRate: 0, market: 'KR' },
+  'SP500':  { code: 'SP500',  name: 'S&P 500', price: 0, change: 0, changeRate: 0, market: 'US', delayed: true },
+  'NASDAQ': { code: 'NASDAQ', name: 'NASDAQ',  price: 0, change: 0, changeRate: 0, market: 'US', delayed: true },
+  'DOW':    { code: 'DOW',    name: 'DOW',     price: 0, change: 0, changeRate: 0, market: 'US', delayed: true },
+}
+
+const INDEX_ORDER = ['0001', '1001', 'SP500', 'NASDAQ', 'DOW']
+
+// ─── 숫자 포맷 ────────────────────────────────────────────────
+
+const formatPrice = (price: number): string => {
+  if (price === 0) return '-'
+  return price.toLocaleString('ko-KR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
+}
+
+const formatChangeRate = (changeRate: number): string => {
+  if (changeRate === 0) return '-'
+  const absRate = Math.abs(changeRate).toFixed(2)
+  return `${absRate}%`
+}
+
+// ─── 컴포넌트 ─────────────────────────────────────────────────
 
 export default function LandingPage(): React.ReactElement {
+  const [indices, setIndices] = useState<Record<string, IndexData>>(INITIAL_INDICES)
+  const [connected, setConnected] = useState(false)
+
+  useEffect(() => {
+    const socket: Socket = io('http://localhost:3000', {
+      transports: ['websocket'],
+    })
+
+    socket.on('connect', () => setConnected(true))
+    socket.on('disconnect', () => setConnected(false))
+
+    socket.on('index:price', (data: IndexData) => {
+      setIndices((prev) => ({
+        ...prev,
+        [data.code]: data,
+      }))
+    })
+
+    return () => {
+      socket.disconnect()
+    }
+  }, [])
+
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
       {/* 히어로 섹션 */}
@@ -39,7 +105,6 @@ export default function LandingPage(): React.ReactElement {
             <br />더 스마트한 투자를 시작하세요.
           </p>
 
-          {/* 시작하기 버튼: 오타 수정됨 */}
           <Link to="/auth" style={{ textDecoration: 'none' }}>
             <button
               style={{
@@ -59,7 +124,7 @@ export default function LandingPage(): React.ReactElement {
           </Link>
         </div>
 
-        {/* 오른쪽 이미지 장식 */}
+        {/* 오른쪽 이미지 */}
         <div
           style={{
             width: '500px',
@@ -86,43 +151,81 @@ export default function LandingPage(): React.ReactElement {
         style={{
           display: 'flex',
           justifyContent: 'space-around',
+          alignItems: 'center',
           padding: '24px 120px',
           backgroundColor: '#ffffff',
           borderTop: '1px solid #eee',
           borderBottom: '1px solid #eee',
+          position: 'relative',
         }}
       >
-        {[
-          { name: 'KOSPI', value: '2,466.05', change: '+0.32%', up: true },
-          { name: 'KOSDAQ', value: '5,407.24', change: '+1.12%', up: true },
-          { name: 'S&P 500', value: '812.33', change: '-0.05%', up: false },
-          { name: 'NASDAQ', value: '2,001.81', change: '+0.87%', up: true },
-          { name: 'DOW', value: '5,001.67', change: '-0.21%', up: false },
-        ].map((item) => (
-          <div key={item.name} style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '13px', color: '#888' }}>{item.name}</div>
-            <div
-              style={{ fontSize: '18px', fontWeight: 'bold', color: '#111' }}
-            >
-              {item.value}
+        {INDEX_ORDER.map((code) => {
+          const item = indices[code]
+          const isUp = item.change >= 0
+          const hasData = item.price !== 0
+
+          return (
+            <div key={code} style={{ textAlign: 'left', minWidth: '120px' }}>
+              {/* 지수명 */}
+              <div style={{ fontSize: '13px', color: '#888', marginBottom: '4px' }}>
+                {item.name}
+                {item.delayed && (
+                  <span style={{ fontSize: '10px', color: '#bbb', marginLeft: '4px' }}>
+                    15분지연
+                  </span>
+                )}
+              </div>
+
+              {/* 현재가 */}
+              <div
+                style={{
+                  fontSize: '22px',
+                  fontWeight: 'bold',
+                  color: '#111',
+                  marginBottom: '4px',
+                }}
+              >
+                {formatPrice(item.price)}
+              </div>
+
+              {/* 화살표 + % */}
+              {hasData ? (
+                <div
+                  style={{
+                    fontSize: '13px',
+                    color: isUp ? '#3CB371' : '#e53935',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                  }}
+                >
+                  <span>{isUp ? '▲' : '▼'}</span>
+                  <span>{formatChangeRate(item.changeRate)}</span>
+                </div>
+              ) : (
+                <div style={{ fontSize: '13px', color: '#ccc' }}>-</div>
+              )}
             </div>
-            <div
-              style={{
-                fontSize: '13px',
-                color: item.up ? '#3CB371' : '#e53935',
-              }}
-            >
-              {item.change}
-            </div>
-          </div>
-        ))}
+          )
+        })}
+
+        {/* 연결 상태 */}
+        <div style={{ position: 'absolute', right: '24px', top: '12px' }}>
+          <span
+            style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: connected ? '#22C55E' : '#ccc',
+              display: 'inline-block',
+            }}
+          />
+        </div>
       </section>
 
       {/* 시장 정보 섹션 */}
       <section style={{ padding: '60px 120px' }}>
-        <h2
-          style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '32px' }}
-        >
+        <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '32px' }}>
           시장 정보
         </h2>
         <div style={{ display: 'flex', gap: '24px' }}>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 export default function Register() {
@@ -24,8 +24,14 @@ export default function Register() {
   const [smsVerified, setSmsVerified] = useState(false)
   const [walletAddress, setWalletAddress] = useState('')
   const [walletSignature, setWalletSignature] = useState('')
+  const [walletConflict, setWalletConflict] = useState(false)
   const [error, setError] = useState('')
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (error) window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [error])
   const [authMethod, setAuthMethod] = useState<'email' | 'phone' | null>(null)
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -123,15 +129,35 @@ export default function Register() {
     }
   }
 
-  const connectWalletAndSign = async () => {
+  const connectWalletAndSign = async (forceAccountSelect = false) => {
     try {
       setError('')
+      setWalletConflict(false)
       if (!window.ethereum) throw new Error('MetaMask가 설치되어 있지 않습니다')
+
+      if (forceAccountSelect) {
+        await window.ethereum.request({
+          method: 'wallet_requestPermissions',
+          params: [{ eth_accounts: {} }],
+        })
+      }
 
       const accounts = await window.ethereum.request({
         method: 'eth_requestAccounts',
       })
       const address = accounts[0]
+
+      // 지갑 주소 사전 체크 (DB + 온체인)
+      const checkRes = await fetch(`http://localhost:3000/api/auth/wallet/check?address=${address}`)
+      const checkData = await checkRes.json()
+      if (!checkData.available) {
+        setWalletConflict(true)
+        const msg = checkData.reason === 'onchain'
+          ? '이미 온체인에 등록된 지갑 주소입니다. 다른 지갑으로 변경해주세요.'
+          : '이미 등록된 지갑 주소입니다. 다른 지갑으로 변경해주세요.'
+        throw new Error(msg)
+      }
+
       setWalletAddress(address)
 
       // 백엔드 buildAuthMessage와 동일한 메시지 생성
@@ -178,7 +204,7 @@ export default function Register() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
-      navigate('/login')
+      setShowSuccessModal(true)
     } catch (err: any) {
       setError(err.message)
     }
@@ -215,6 +241,7 @@ export default function Register() {
   })
 
   return (
+    <>
     <div
       style={{
         minHeight: '100vh',
@@ -498,17 +525,31 @@ export default function Register() {
             <div>
               <label style={labelStyle}>지갑 연결</label>
               {!walletSignature ? (
-                <button
-                  onClick={connectWalletAndSign}
-                  style={{
-                    ...btnStyle(true),
-                    width: '100%',
-                    padding: '12px',
-                    backgroundColor: '#f0a500',
-                  }}
-                >
-                  MetaMask 연결 및 서명
-                </button>
+                walletConflict ? (
+                  <button
+                    onClick={() => connectWalletAndSign(true)}
+                    style={{
+                      ...btnStyle(true),
+                      width: '100%',
+                      padding: '12px',
+                      backgroundColor: '#e53935',
+                    }}
+                  >
+                    다른 지갑으로 변경
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => connectWalletAndSign()}
+                    style={{
+                      ...btnStyle(true),
+                      width: '100%',
+                      padding: '12px',
+                      backgroundColor: '#f0a500',
+                    }}
+                  >
+                    MetaMask 연결 및 서명
+                  </button>
+                )
               ) : (
                 <p style={{ fontSize: '12px', color: '#3CB371' }}>
                   ✅ 지갑 서명 완료 ({walletAddress.slice(0, 6)}...
@@ -601,5 +642,53 @@ export default function Register() {
         </div>
       </div>
     </div>
+
+    {/* 회원가입 완료 모달 */}
+    {showSuccessModal && (
+      <div style={{
+        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: '20px',
+      }}>
+        <div style={{
+          backgroundColor: '#fff', borderRadius: '24px', padding: '40px',
+          width: '100%', maxWidth: '400px', textAlign: 'center',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.15)',
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '12px' }}>🎉</div>
+          <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1a1a1a', marginBottom: '8px' }}>
+            회원가입 완료!
+          </h3>
+          <p style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>
+            투자 성향 설문을 완료하면<br />맞춤형 투자 정보를 제공받을 수 있습니다.
+          </p>
+          <p style={{ fontSize: '12px', color: '#aaa', marginBottom: '28px' }}>
+            로그인 후 설문이 자동으로 시작됩니다.
+          </p>
+          <button
+            onClick={() => navigate('/login')}
+            style={{
+              width: '100%', padding: '14px', backgroundColor: '#3CB371',
+              color: '#fff', border: 'none', borderRadius: '12px',
+              fontSize: '15px', fontWeight: '600', cursor: 'pointer',
+              marginBottom: '12px',
+            }}
+          >
+            로그인 & 설문 시작하기
+          </button>
+          <button
+            onClick={() => navigate('/login')}
+            style={{
+              background: 'none', border: 'none', color: '#aaa',
+              fontSize: '13px', cursor: 'pointer', textDecoration: 'underline',
+            }}
+          >
+            다음에 하기
+          </button>
+        </div>
+      </div>
+    )}
+    </>
   )
 }

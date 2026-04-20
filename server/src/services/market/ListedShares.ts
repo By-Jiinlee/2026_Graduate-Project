@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { QueryTypes } from 'sequelize'
 import sequelize from '../../config/database'
-import {getKisAccessToken} from "./KisAuth";
+import { getKisAccessToken } from './KisAuth'
 
 const APP_KEY = process.env.KIS_REAL_APP_KEY!
 const APP_SECRET = process.env.KIS_REAL_APP_SECRET!
@@ -12,12 +12,12 @@ const BASE_URL = 'https://openapi.koreainvestment.com:9443'
 interface Stock {
     id: number
     code: string
+    updated_at: string | null
 }
 
 // ─── KIS API ──────────────────────────────────────────────────
 
 export const fetchListedShares = async (stockCode: string): Promise<number | null> => {
-
     const token = await getKisAccessToken()
 
     const res = await axios.get(
@@ -46,14 +46,15 @@ export const fetchListedShares = async (stockCode: string): Promise<number | nul
 
 export const updateListedShares = async (stockId: number, listedShares: number): Promise<void> => {
     await sequelize.query(
-        `UPDATE stocks SET listed_shares = :listedShares WHERE id = :stockId`,
+        `UPDATE stocks SET listed_shares = :listedShares, updated_at = NOW() WHERE id = :stockId`,
         { replacements: { listedShares, stockId }, type: QueryTypes.UPDATE }
     )
 }
 
 export const getActiveStocks = async (): Promise<Stock[]> => {
     return sequelize.query<Stock>(
-        `SELECT id, code FROM stocks WHERE is_active = 1 AND market IN ('KOSPI','KOSDAQ')`,
+        `SELECT id, code, updated_at FROM stocks
+         WHERE is_active = 1 AND market IN ('KOSPI','KOSDAQ')`,
         { type: QueryTypes.SELECT }
     )
 }
