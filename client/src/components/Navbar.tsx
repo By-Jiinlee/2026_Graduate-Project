@@ -185,7 +185,6 @@ export default function Navbar() {
           <div className="flex items-center space-x-20">
             <div className="flex space-x-16 text-black font-medium">
               <Link to="/stock" className="hover:text-[#22C55E] transition">종목</Link>
-              <Link to="/manage" className="hover:text-[#22C55E] transition">주식 관리</Link>
               <Link to="/community" className="hover:text-[#22C55E] transition">커뮤니티</Link>
               <Link to="/events" className="hover:text-[#22C55E] transition">이벤트</Link>
               <Link to="/support" className="hover:text-[#22C55E] transition">고객센터</Link>
