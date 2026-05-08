@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { initialPosts, type Post } from '../data/mockPosts'
+// Post 타입을 가져온 뒤, imageUrl 속성을 선택적으로 추가(확장)합니다.
+import { initialPosts, type Post as BasePost } from '../data/mockPosts'
+
+// 기존 Post 타입에 imageUrl이 없을 경우를 대비해 인터페이스를 확장합니다.
+interface Post extends BasePost {
+  imageUrl?: string;
+}
 
 export default function Community() {
   const navigate = useNavigate();
@@ -9,14 +15,14 @@ export default function Community() {
   const [activeTab, setActiveTab] = useState('전체');
   const [activeFilter, setActiveFilter] = useState('최신순');
   const [searchTerm, setSearchTerm] = useState('');
-  const [visibleCount, setVisibleCount] = useState(10); // 더보기 기능
+  const [visibleCount, setVisibleCount] = useState(10);
 
   useEffect(() => {
     const savedPosts = localStorage.getItem('upTick_posts');
     if (savedPosts) {
       setPostList(JSON.parse(savedPosts));
     } else {
-      setPostList(initialPosts);
+      setPostList(initialPosts as Post[]);
     }
   }, []);
 
@@ -26,9 +32,9 @@ export default function Community() {
     const parts = text.split(new RegExp(`(${query})`, 'gi'));
     return (
       <span>
-        {parts.map((part, i) => 
+        {parts.map((part, index) => 
           part.toLowerCase() === query.toLowerCase() ? (
-            <mark key={i} style={{ backgroundColor: '#22C55E', color: '#fff', borderRadius: '2px', padding: '0 2px' }}>{part}</mark>
+            <mark key={index} style={{ backgroundColor: '#22C55E', color: '#fff', borderRadius: '2px', padding: '0 2px' }}>{part}</mark>
           ) : (part)
         )}
       </span>
@@ -79,7 +85,7 @@ export default function Community() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 150px 70px 70px', padding: '12px 24px', backgroundColor: '#f5f5f5', fontSize: '13px', color: '#888' }}>
           <span>제목</span><span>작성자</span><span>작성일</span><span style={{textAlign:'center'}}>조회</span><span style={{textAlign:'center'}}>추천</span>
         </div>
-        {displayedPosts.map((post, i) => (
+        {displayedPosts.map((post) => (
           <div key={post.id} onClick={() => navigate(`/community/${post.id}`)} style={{ display: 'grid', gridTemplateColumns: '1fr 120px 150px 70px 70px', padding: '16px 24px', borderBottom: '1px solid #f0f0f0', cursor: 'pointer', alignItems: 'center' }}>
             <span><span style={{ color: '#22C55E', marginRight: '8px', fontSize: '12px' }}>[{post.category}]</span>{highlightText(post.title, searchTerm)} {post.imageUrl && '🖼️'}</span>
             <span style={{ color: '#888' }}>{highlightText(post.author, searchTerm)}</span>

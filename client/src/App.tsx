@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import Navbar from './components/Navbar'
 import LandingPage from './pages/LandingPage'
-import Dashboard from './pages/Dashboard'
 import StockList from './pages/StockList'
 import About from './pages/About'
 import Community from './pages/Community'
@@ -111,8 +110,6 @@ function App() {
 
         {/* 로그인 AND 설문까지 모두 완료해야 접근 가능한 영역들 */}
         <Route path="/stock/:stockId" element={<ProtectedRoute><SurveyGuard><StockDetail /></SurveyGuard></ProtectedRoute>} />
-        <Route path="/manage" element={<ProtectedRoute><SurveyGuard><Dashboard /></SurveyGuard></ProtectedRoute>} />
-        <Route path="/dashboard" element={<ProtectedRoute><SurveyGuard><Dashboard /></SurveyGuard></ProtectedRoute>} />
         <Route path="/community" element={<ProtectedRoute><SurveyGuard><Community /></SurveyGuard></ProtectedRoute>} />
         <Route path="/community/:id" element={<ProtectedRoute><SurveyGuard><PostDetail /></SurveyGuard></ProtectedRoute>} />
         <Route path="/community/write" element={<ProtectedRoute><SurveyGuard><WritePost /></SurveyGuard></ProtectedRoute>} />
