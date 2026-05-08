@@ -2,6 +2,8 @@ import crypto from 'crypto'
 import { Op, WhereOperators, WhereOptions } from 'sequelize'
 import TrustedDevice, { DeviceType } from '../../models/auth/TrustedDevice'
 import LoginRecord from '../../models/auth/LoginRecord'
+import { sendNewDeviceAlert, sendDeviceRegisteredAlert, sendDeviceRevokedAlert } from './emailService'
+import User from '../../models/user/User'
 
 // ─────────────────────────────────────────────
 // 상수
@@ -28,7 +30,7 @@ function detectDeviceType(userAgent: string): DeviceType {
   return /Mobile|Android|iPhone|iPad/i.test(userAgent) ? 'mobile' : 'pc'
 }
 
-function buildLabel(userAgent: string): string {
+export function buildLabel(userAgent: string): string {
   const browser = /Edg\//i.test(userAgent)
     ? 'Edge'
     : /Chrome/i.test(userAgent)
@@ -91,7 +93,6 @@ export async function verifyTrustedDevice(
 
 // ─────────────────────────────────────────────
 // 신뢰 기기 등록
-// loginStep2 성공 후 rememberDevice=true일 때 호출
 // 동일 device_type이 있으면 upsert로 덮어씀 (PC/모바일 각 1대 유지)
 // ─────────────────────────────────────────────
 export async function registerTrustedDevice(
@@ -104,6 +105,13 @@ export async function registerTrustedDevice(
   const hashedToken = hashToken(rawToken)
   const fingerprint = buildFingerprint(userAgent, ip)
   const expiresAt = new Date(Date.now() + TRUSTED_DAYS * 24 * 60 * 60 * 1000)
+  const label = buildLabel(userAgent)
+
+  // upsert 전에 기존 기기 존재 여부 확인
+  const existing = await TrustedDevice.findOne({
+    where: { user_id: userId, device_type: deviceType },
+  })
+  const isNewDevice = !existing
 
   await TrustedDevice.upsert({
     user_id: userId,
@@ -112,11 +120,24 @@ export async function registerTrustedDevice(
     device_fingerprint: fingerprint,
     user_agent: userAgent,
     ip,
-    label: buildLabel(userAgent),
+    label,
     last_used_at: new Date(),
     expires_at: expiresAt,
     created_at: new Date(),
   })
+
+  // 신규 기기면 이메일 알림
+  if (isNewDevice) {
+    const user = await User.findByPk(userId)
+    if (user) {
+      sendNewDeviceAlert(user.email, label, ip, new Date()).catch(console.error)
+    }
+  }
+  // 기기 등록 알림
+  const user = await User.findByPk(userId)
+  if (user) {
+    sendDeviceRegisteredAlert(user.email, label, ip).catch(console.error)
+  }
 
   return rawToken
 }
@@ -139,9 +160,17 @@ export async function getTrustedDevices(userId: number) {
 // 특정 기기 신뢰 해제 (마이페이지)
 // ─────────────────────────────────────────────
 export async function revokeTrustedDevice(userId: number, deviceId: number): Promise<void> {
-  await TrustedDevice.destroy({ where: { id: deviceId, user_id: userId } })
-}
+  const device = await TrustedDevice.findOne({ where: { id: deviceId, user_id: userId } })
+  if (!device) return
 
+  // 기기 해제 메일 전송
+  const user = await User.findByPk(userId)
+  if (user && device.label) {
+    sendDeviceRevokedAlert(user.email, device.label).catch(console.error)
+  }
+
+  await device.destroy()
+}
 // ─────────────────────────────────────────────
 // 전체 기기 해제 (탈퇴 시)
 // ─────────────────────────────────────────────

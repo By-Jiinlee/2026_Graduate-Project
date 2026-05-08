@@ -16,6 +16,8 @@ import {
 } from '../web3/contractService'
 import { sendVerificationEmail } from './emailService'
 import { sendVerificationSms } from './smsService'
+import { sendNewDeviceAlert } from './emailService'
+import { buildLabel } from './trustedDeviceService'
 import { Op } from 'sequelize'
 import Blacklist from '../../models/auth/Blacklist'
 import WithdrawnUser from '../../models/auth/WithdrawnUser'
@@ -322,10 +324,12 @@ export const loginStep2 = async (
   // + 추가 신뢰 기기면 스킵
   if (!skipSignature) {
   await contractVerifySignature(walletAddress, nonce, signature)
+  sendNewDeviceAlert(user.email, buildLabel(userAgent), ip, new Date()).catch(console.error)
   }
 
   // 로그인 기록 저장
   await saveLoginRecord(userId, walletAddress, ip, userAgent)
+
 
   // JWT 발급
   const accessToken = jwt.sign(

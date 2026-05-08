@@ -39,3 +39,107 @@ export const sendVerificationEmail = async (
     `,
   })
 }
+
+// 미등록 기기 로그인 알림
+export const sendNewDeviceAlert = async (
+  email: string,
+  label: string,
+  ip: string,
+  loginAt: Date,
+): Promise<void> => {
+  const timeStr = loginAt.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
+  await transporter.sendMail({
+    from: `"UpTick" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: '[UpTick] 새로운 기기에서 로그인되었습니다',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2 style="color: #1a1a2e;">새로운 기기 로그인 감지</h2>
+        <p>회원님의 계정에 새로운 기기에서 로그인이 감지되었습니다.</p>
+        <div style="background: #f4f4f4; border-radius: 8px; padding: 16px; margin: 20px 0;">
+          <p style="margin: 4px 0;"><strong>기기:</strong> ${label}</p>
+          <p style="margin: 4px 0;"><strong>IP:</strong> ${ip}</p>
+          <p style="margin: 4px 0;"><strong>시각:</strong> ${timeStr}</p>
+        </div>
+        <p style="color: #888; font-size: 13px;">본인이 로그인한 경우 이 메일을 무시해주세요. 본인이 아니라면 즉시 비밀번호를 변경해주세요.</p>
+      </div>
+    `,
+  })
+}
+
+// 신뢰 기기 등록 알림
+export const sendDeviceRegisteredAlert = async (
+  email: string,
+  label: string,
+  ip: string,
+): Promise<void> => {
+  const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
+  await transporter.sendMail({
+    from: `"UpTick" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: '[UpTick] 새로운 신뢰 기기가 등록되었습니다',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2 style="color: #1a1a2e;">신뢰 기기 등록</h2>
+        <p>아래 기기가 신뢰 기기로 등록되었습니다.</p>
+        <div style="background: #f4f4f4; border-radius: 8px; padding: 16px; margin: 20px 0;">
+          <p style="margin: 4px 0;"><strong>기기:</strong> ${label}</p>
+          <p style="margin: 4px 0;"><strong>IP:</strong> ${ip}</p>
+          <p style="margin: 4px 0;"><strong>시각:</strong> ${timeStr}</p>
+        </div>
+        <p style="color: #888; font-size: 13px;">본인이 등록하지 않았다면 즉시 비밀번호를 변경하고 마이페이지에서 기기를 삭제해주세요.</p>
+      </div>
+    `,
+  })
+}
+
+// 신뢰 기기 삭제 알림
+export const sendDeviceRevokedAlert = async (
+  email: string,
+  label: string,
+): Promise<void> => {
+  const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
+  await transporter.sendMail({
+    from: `"UpTick" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: '[UpTick] 신뢰 기기가 삭제되었습니다',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2 style="color: #1a1a2e;">신뢰 기기 삭제</h2>
+        <p>아래 기기가 신뢰 기기에서 삭제되었습니다.</p>
+        <div style="background: #f4f4f4; border-radius: 8px; padding: 16px; margin: 20px 0;">
+          <p style="margin: 4px 0;"><strong>기기:</strong> ${label}</p>
+          <p style="margin: 4px 0;"><strong>시각:</strong> ${timeStr}</p>
+        </div>
+        <p style="color: #888; font-size: 13px;">본인이 삭제하지 않았다면 즉시 비밀번호를 변경해주세요.</p>
+      </div>
+    `,
+  })
+}
+
+
+// 이상 로그인 시도 감지 알림
+export const sendAnomalyAlertEmail = async (
+  email: string,
+  reasons: string[],
+): Promise<void> => {
+  const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
+
+  await transporter.sendMail({
+    from: `"UpTick" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: '[UpTick] 비정상 로그인 시도가 감지되었습니다',
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+        <h2 style="color: #e53935;">보안 알림</h2>
+        <p>회원님의 계정에서 비정상적인 로그인 시도가 감지되었습니다.</p>
+        <div style="background: #fff3f3; border-left: 4px solid #e53935; border-radius: 4px; padding: 16px; margin: 20px 0;">
+          <p style="margin: 0 0 8px 0; font-weight: bold;">감지된 항목</p>
+          ${reasons.map(r => `<p style="margin: 4px 0; color: #555;">• ${r}</p>`).join('')}
+        </div>
+        <p style="margin: 4px 0; color: #888; font-size: 13px;">감지 시각: ${timeStr}</p>
+        <p style="color: #888; font-size: 13px; margin-top: 16px;">본인이 맞다면 이 메일을 무시해주세요. 본인이 아니라면 즉시 비밀번호를 변경해주세요.</p>
+      </div>
+    `,
+  })
+}
