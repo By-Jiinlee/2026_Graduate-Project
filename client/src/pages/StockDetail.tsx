@@ -60,48 +60,7 @@ const datetimeToTs = (d: string): UTCTimestamp => {
     return Math.floor(new Date(iso + 'Z').getTime() / 1000) as UTCTimestamp
 }
 
-function aggregateWeekly(candles: CandleBar[]): CandleBar[] {
-    const weeks: Record<string, CandleBar[]> = {}
-    for (const c of candles) {
-        const d = new Date(c.time)
-        const day = d.getDay()
-        const diff = day === 0 ? -6 : 1 - day
-        const monday = new Date(d)
-        monday.setDate(d.getDate() + diff)
-        const key = monday.toISOString().slice(0, 10)
-        if (!weeks[key]) weeks[key] = []
-        weeks[key].push(c)
-    }
-    return Object.entries(weeks)
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([time, bars]) => ({
-            time,
-            open:   Number(bars[0].open),
-            high:   Math.max(...bars.map(b => Number(b.high))),
-            low:    Math.min(...bars.map(b => Number(b.low))),
-            close:  Number(bars[bars.length - 1].close),
-            volume: bars.reduce((s, b) => s + Number(b.volume), 0),
-        }))
-}
 
-function aggregateMonthly(candles: CandleBar[]): CandleBar[] {
-    const months: Record<string, CandleBar[]> = {}
-    for (const c of candles) {
-        const key = c.time.slice(0, 7) + '-01'
-        if (!months[key]) months[key] = []
-        months[key].push(c)
-    }
-    return Object.entries(months)
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([time, bars]) => ({
-            time,
-            open:   Number(bars[0].open),
-            high:   Math.max(...bars.map(b => Number(b.high))),
-            low:    Math.min(...bars.map(b => Number(b.low))),
-            close:  Number(bars[bars.length - 1].close),
-            volume: bars.reduce((s, b) => s + Number(b.volume), 0),
-        }))
-}
 
 export default function StockDetail() {
     const { stockId } = useParams<{ stockId: string }>()
@@ -115,10 +74,15 @@ export default function StockDetail() {
     const linePeriodRef = useRef<LinePeriod>('1y')
 
     const [info, setInfo] = useState<StockInfo | null>(null)
-    const [allCandles, setAllCandles] = useState<CandleBar[]>([])
     const [minuteCandles, setMinuteCandles] = useState<CandleBar[]>([])
     const [minuteLoaded, setMinuteLoaded] = useState(false)
     const [minuteLoading, setMinuteLoading] = useState(false)
+    const [weekCandles, setWeekCandles] = useState<CandleBar[]>([])
+    const [weekLoaded, setWeekLoaded] = useState(false)
+    const [weekLoading, setWeekLoading] = useState(false)
+    const [histData, setHistData] = useState<CandleBar[]>([])
+    const [histLoading, setHistLoading] = useState(false)
+    const kisCache = useRef<Map<string, CandleBar[]>>(new Map())
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(false)
     const [livePrice, setLivePrice] = useState<{
@@ -129,7 +93,7 @@ export default function StockDetail() {
     const [linePeriod, setLinePeriod] = useState<LinePeriod>('1y')
     const [candleType, setCandleType] = useState<CandleType>('day')
 
-    // 초기 데이터 로드
+    // 초기 데이터: 종목 기본정보만 로드
     useEffect(() => {
         if (!stockId) return
         const load = async () => {
@@ -137,7 +101,6 @@ export default function StockDetail() {
                 const res = await axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/detail`)
                 if (!res.data.info) { setError(true); return }
                 setInfo(res.data.info)
-                setAllCandles(res.data.candles ?? [])
                 setLivePrice({
                     price:      Number(res.data.info.price),
                     change:     Number(res.data.info.change),
@@ -153,8 +116,9 @@ export default function StockDetail() {
         load()
     }, [stockId])
 
-    // 분봉 필요 시 로드
-    const needsMinute = (chartMode === 'line' && linePeriod === '1d') || (chartMode === 'candle' && candleType === 'minute')
+    // 분봉 필요 시 로드 (선차트 1일, 봉차트 분봉 탭)
+    const needsMinute = (chartMode === 'line' && linePeriod === '1d') ||
+                        (chartMode === 'candle' && candleType === 'minute')
     useEffect(() => {
         if (!needsMinute || minuteLoaded || !stockId) return
         setMinuteLoading(true)
@@ -164,67 +128,157 @@ export default function StockDetail() {
             .finally(() => setMinuteLoading(false))
     }, [needsMinute, minuteLoaded, stockId])
 
+    // 선차트 1주: 과거 5거래일 분봉 데이터 수집
+    const needsWeek = chartMode === 'line' && linePeriod === '1w'
+    useEffect(() => {
+        if (!needsWeek || weekLoaded || !stockId) return
+
+        // KST 기준 최근 5 평일 (YYYYMMDD)
+        const getPastWeekdays = (count: number): string[] => {
+            const days: string[] = []
+            const d = new Date(Date.now() + 9 * 3600 * 1000)
+            while (days.length < count) {
+                const dow = d.getUTCDay()
+                if (dow !== 0 && dow !== 6) {
+                    days.unshift(d.toISOString().slice(0, 10).replace(/-/g, ''))
+                }
+                d.setUTCDate(d.getUTCDate() - 1)
+            }
+            return days
+        }
+
+        const weekdays = getPastWeekdays(5)
+        setWeekLoading(true)
+        Promise.all(
+            weekdays.map(date =>
+                axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/minute?interval=1&date=${date}`)
+                    .then(res => (res.data.candles ?? []) as CandleBar[])
+                    .catch(() => [] as CandleBar[])
+            )
+        ).then(results => {
+            const combined = results.flat().sort((a, b) => a.time.localeCompare(b.time))
+            setWeekCandles(combined)
+            setWeekLoaded(true)
+        }).finally(() => setWeekLoading(false))
+    }, [needsWeek, weekLoaded, stockId])
+
+    // KIS 히스토리 직접 조회 (분봉·일봉 제외, 탭 전환 시 캐시 우선)
+    useEffect(() => {
+        if (!stockId) return
+
+        // KST 기준 날짜 유틸
+        const kstDate = (daysOffset = 0) => {
+            const d = new Date(Date.now() + 9 * 3600 * 1000)
+            d.setDate(d.getDate() - daysOffset)
+            return d.toISOString().slice(0, 10).replace(/-/g, '')
+        }
+
+        let periodCode: 'D' | 'W' | 'M' | null = null
+        let from: string | null = null
+        let cacheKey: string | null = null
+
+        if (chartMode === 'line') {
+            // 선차트: 단기=일봉(D), 중기=주봉(W), 장기=월봉(M)
+            const map: Record<LinePeriod, { code: 'D'|'W'|'M'; days: number } | null> = {
+                '1d':  null,
+                '1w':  null,   // 1w는 분봉 5거래일 방식 → 별도 fetch
+                '3m':  { code: 'D', days: 90   },
+                '1y':  { code: 'W', days: 365  },
+                '3y':  { code: 'M', days: 1095 },
+                '5y':  { code: 'M', days: 1825 },
+                '10y': { code: 'M', days: 3650 },
+            }
+            const cfg = map[linePeriod]
+            if (cfg) { periodCode = cfg.code; from = kstDate(cfg.days); cacheKey = `line:${linePeriod}` }
+        } else {
+            // 봉차트: 증권사 방식
+            if (candleType === 'day') {
+                periodCode = 'D'; from = kstDate(90);  cacheKey = 'candle:day'   // 3개월 일봉
+            } else if (candleType === 'week') {
+                periodCode = 'W'; from = kstDate(180); cacheKey = 'candle:week'  // 6개월 주봉
+            } else if (candleType === 'month') {
+                periodCode = 'M'; from = kstDate(365 * 5); cacheKey = 'candle:month' // 5년 월봉
+            }
+        }
+
+        if (!periodCode || !from || !cacheKey) return
+
+        // 캐시 히트
+        if (kisCache.current.has(cacheKey)) {
+            setHistData(kisCache.current.get(cacheKey)!)
+            return
+        }
+
+        setHistLoading(true)
+        axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/history`, {
+            params: { period_code: periodCode, from, to: kstDate() },
+        })
+            .then(res => {
+                const candles: CandleBar[] = res.data.candles ?? []
+                kisCache.current.set(cacheKey!, candles)
+                setHistData(candles)
+            })
+            .catch(() => setHistData([]))
+            .finally(() => setHistLoading(false))
+    }, [chartMode, linePeriod, candleType, stockId])
+
     // 차트에 그릴 데이터 계산
-    // 분봉: UTCTimestamp (시분 표시), 일봉/주봉/월봉/선차트: string date (business day 모드 → 바 간격 균등)
     const { chartItems, isMinute, isLine } = useMemo(() => {
         if (chartMode === 'line') {
             if (linePeriod === '1d') {
                 return {
                     chartItems: minuteCandles.map(c => ({
-                        time: datetimeToTs(c.time),      // UTCTimestamp
+                        time:  datetimeToTs(c.time),
                         value: Number(c.close),
                     })),
                     isMinute: true,
-                    isLine: true,
+                    isLine:   true,
                 }
             }
-            const { days } = LINE_PERIODS.find(p => p.key === linePeriod)!
-            const cutoff = new Date()
-            cutoff.setDate(cutoff.getDate() - days)
-            const cutoffStr = cutoff.toISOString().slice(0, 10)
+            if (linePeriod === '1w') {
+                // 5거래일 분봉 데이터 (UTCTimestamp, 다중일)
+                return {
+                    chartItems: weekCandles.map(c => ({
+                        time:  datetimeToTs(c.time),
+                        value: Number(c.close),
+                    })),
+                    isMinute: true,
+                    isLine:   true,
+                }
+            }
+            // KIS D/W/M 봉 → UTCTimestamp로 변환 (연속시간 모드로 양 끝 여백 제거)
             return {
-                chartItems: allCandles
-                    .filter(c => c.time >= cutoffStr)
-                    .map(c => ({ time: c.time as Time, value: Number(c.close) })),  // string date
-                isMinute: false,
-                isLine: true,
+                chartItems: histData.map(c => ({ time: dateToTs(c.time), value: Number(c.close) })),
+                isMinute:   false,
+                isLine:     true,
             }
         }
 
-        // 봉차트
-        let bars: CandleBar[]
-        let isMin = false
-        if (candleType === 'minute') { bars = minuteCandles; isMin = true }
-        else if (candleType === 'day')   bars = allCandles
-        else if (candleType === 'week')  bars = aggregateWeekly(allCandles)
-        else                             bars = aggregateMonthly(allCandles)
-
-        if (isMin) {
+        // ── 봉차트 ──────────────────────────────────────────────
+        if (candleType === 'minute') {
+            // 오늘 1분봉 (UTCTimestamp, HH:MM)
             return {
-                chartItems: bars.map(c => ({
-                    time:  datetimeToTs(c.time),         // UTCTimestamp
-                    open:  Number(c.open),
-                    high:  Number(c.high),
-                    low:   Number(c.low),
-                    close: Number(c.close),
+                chartItems: minuteCandles.map(c => ({
+                    time:  datetimeToTs(c.time),
+                    open:  Number(c.open), high: Number(c.high),
+                    low:   Number(c.low),  close: Number(c.close),
                 })),
                 isMinute: true,
-                isLine: false,
+                isLine:   false,
             }
         }
 
+        // 일봉(3개월)/주봉(6개월)/월봉(5년): KIS 직접 조회 데이터 → string date
         return {
-            chartItems: bars.map(c => ({
-                time:  c.time as Time,                   // string date → business day 모드
-                open:  Number(c.open),
-                high:  Number(c.high),
-                low:   Number(c.low),
-                close: Number(c.close),
+            chartItems: histData.map(c => ({
+                time:  c.time as Time,
+                open:  Number(c.open), high: Number(c.high),
+                low:   Number(c.low),  close: Number(c.close),
             })),
             isMinute: false,
-            isLine: false,
+            isLine:   false,
         }
-    }, [chartMode, linePeriod, candleType, allCandles, minuteCandles])
+    }, [chartMode, linePeriod, candleType, histData, minuteCandles, weekCandles])
 
     // 차트 생성/재생성
     useEffect(() => {
@@ -248,13 +302,60 @@ export default function StockDetail() {
             },
             timeScale: {
                 borderColor: '#e5e7eb',
-                timeVisible: isMinute,   // 분봉만 시간 표시, 나머지는 날짜만
+                timeVisible: isMinute,
                 secondsVisible: false,
                 rightOffset: 0,
+                fixRightEdge: true,
+                fixLeftEdge: true,
                 minBarSpacing: isMinute ? 1 : 2,
+                tickMarkFormatter: (time: any, tickMarkType: any) => {
+                    const mode   = chartModeRef.current
+                    const period = linePeriodRef.current
+                    const ctype  = candleTypeRef.current
+
+                    if (typeof time === 'number') {
+                        const isSubHour = (mode === 'line' && (period === '1d' || period === '1w')) ||
+                                          (mode === 'candle' && (ctype === 'minute' || ctype === 'day'))
+                        if (isSubHour) {
+                            const d = new Date(time * 1000)
+                            // 1w 다중일: 날짜 경계(tickMarkType<=2)는 MM/DD로
+                            if (period === '1w' && tickMarkType != null && tickMarkType <= 2) {
+                                return `${d.getUTCMonth()+1}/${d.getUTCDate()}`
+                            }
+                            return `${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')}`
+                        }
+                        // 선차트 날짜레벨 timestamp → 날짜 포맷
+                        const d = new Date(time * 1000)
+                        const y = d.getUTCFullYear()
+                        const mo = d.getUTCMonth() + 1
+                        const dy = d.getUTCDate()
+                        if (mode === 'line' && ['3y', '5y', '10y'].includes(period)) {
+                            return `${y}.${mo.toString().padStart(2,'0')}`
+                        }
+                        return `${mo}/${dy}`
+                    }
+
+                    let year: number, month: number, day: number
+                    if (typeof time === 'string') {
+                        const p = time.split('-')
+                        year = parseInt(p[0]); month = parseInt(p[1]); day = parseInt(p[2])
+                    } else if (typeof time === 'object' && time !== null && 'year' in time) {
+                        ;({ year, month, day } = time as any)
+                    } else {
+                        return ''
+                    }
+
+                    // 봉차트 월봉 → YYYY.MM, 나머지 → MM/DD
+                    if (mode === 'candle' && ctype === 'month') {
+                        return `${year}.${month.toString().padStart(2, '0')}`
+                    }
+                    return `${month}/${day}`
+                },
             },
             rightPriceScale: { borderColor: '#e5e7eb' },
         })
+
+        const priceFormat = { type: 'price' as const, precision: 0, minMove: 1 }
 
         if (isLine) {
             const series = chart.addSeries(AreaSeries, {
@@ -262,6 +363,7 @@ export default function StockDetail() {
                 topColor: 'rgba(46,204,113,0.25)',
                 bottomColor: 'rgba(46,204,113,0.02)',
                 lineWidth: 2,
+                priceFormat,
             })
             series.setData(chartItems as any)
             seriesRef.current = series
@@ -273,6 +375,7 @@ export default function StockDetail() {
                 borderDownColor: '#3b82f6',
                 wickUpColor:     '#ef4444',
                 wickDownColor:   '#3b82f6',
+                priceFormat,
             })
             series.setData(chartItems as any)
             seriesRef.current = series
@@ -280,25 +383,20 @@ export default function StockDetail() {
 
         chartRef.current = chart
 
-        // 차트 타입별 초기 줌 설정
         requestAnimationFrame(() => {
             const len = chartItems.length
-            // 봉차트 일봉/주봉: 초기 줌 = 최근 N봉 (일 단위 라벨이 보이는 수준)
-            // 그 외 (분봉·선차트·월봉): fitContent
-            const initialBars: Record<string, number> = {
-                day:    20,   // 일봉: 최근 20거래일 (~1개월) → 일 단위 라벨 세밀하게
-                week:   12,   // 주봉: 최근 12주 (~3개월)    → 주 단위 라벨 세밀하게
-                month:  24,   // 월봉: 최근 24개월 (~2년)    → 월 단위 라벨 세밀하게
-                minute: 0,    // 분봉: 전체 fitContent
-            }
-            const n = !isLine ? (initialBars[candleType] ?? 0) : 0
+            if (len === 0) return
 
-            if (n > 0 && len > n) {
-                // 봉차트 일봉/주봉/월봉: 최근 N봉만 표시
-                chart.timeScale().setVisibleLogicalRange({ from: len - n, to: len - 1 })
+            if (isLine && !isMinute && len >= 2) {
+                // 선차트 날짜레벨 timestamp: 첫~끝 타임스탬프 정확히 맞춰 양 끝 여백 제거
+                const first = (chartItems[0] as any).time as UTCTimestamp
+                const last  = (chartItems[len - 1] as any).time as UTCTimestamp
+                chart.timeScale().setVisibleRange({ from: first, to: last })
+            } else if (isMinute) {
+                chart.timeScale().fitContent()
             } else {
-                // 선차트 / 분봉: 여백 없이 데이터 범위 딱 맞게
-                chart.timeScale().setVisibleLogicalRange({ from: 0, to: len - 1 })
+                // 봉차트 주봉·월봉 (business day string): 논리범위로 딱 맞게
+                chart.timeScale().setVisibleLogicalRange({ from: -0.5, to: len - 0.5 })
             }
         })
 
@@ -311,7 +409,7 @@ export default function StockDetail() {
             chartRef.current = null
             seriesRef.current = null
         }
-    }, [chartItems, isMinute, isLine, candleType])
+    }, [chartItems, isMinute, isLine])
 
     // 모드/기간/타입 refs 동기화 (소켓 콜백 stale closure 방지)
     useEffect(() => { chartModeRef.current = chartMode }, [chartMode])
@@ -345,14 +443,22 @@ export default function StockDetail() {
             const todayStr = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10) as Time
 
             if (mode === 'line') {
-                const time = period === '1d' ? kstTs : todayStr
+                // 1d: 분봉 timestamp / 그 외: 날짜 timestamp (series가 UTCTimestamp 모드)
+                const time = period === '1d' ? kstTs : dateToTs(todayStr as string) as UTCTimestamp
                 seriesRef.current.update({ time, value: data.price } as any)
             } else {
                 const candleMode = candleTypeRef.current
-                const time = candleMode === 'minute' ? kstTs : todayStr
-                seriesRef.current.update({
-                    time, open: data.open, high: data.high, low: data.low, close: data.price,
-                } as any)
+                if (candleMode === 'minute') {
+                    // 분봉: UTCTimestamp
+                    seriesRef.current.update({
+                        time: kstTs, open: data.open, high: data.high, low: data.low, close: data.price,
+                    } as any)
+                } else {
+                    // 일봉/주봉/월봉: string date (오늘 봉 업데이트)
+                    seriesRef.current.update({
+                        time: todayStr, open: data.open, high: data.high, low: data.low, close: data.price,
+                    } as any)
+                }
             }
         })
 
@@ -486,7 +592,7 @@ export default function StockDetail() {
                         </div>
                     </div>
 
-                    {minuteLoading && (
+                    {(minuteLoading || weekLoading || histLoading) && (
                         <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '60px 0' }}>로딩 중...</div>
                     )}
                     <div ref={chartContainerRef} style={{ width: '100%' }} />

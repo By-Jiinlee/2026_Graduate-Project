@@ -49,7 +49,12 @@ interface DailyPrice {
     trading_value: number;
 }
 
-export const fetchDailyPrices = async (stockCode: string, startDate: string, endDate: string): Promise<DailyPrice[]> => {
+export const fetchDailyPrices = async (
+    stockCode: string,
+    startDate: string,
+    endDate: string,
+    periodDivCode: 'D' | 'W' | 'M' = 'D',
+): Promise<DailyPrice[]> => {
     try {
         const token = await getAccessToken();
         const res = await axios.get(`${BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice`, {
@@ -65,7 +70,7 @@ export const fetchDailyPrices = async (stockCode: string, startDate: string, end
                 FID_INPUT_ISCD: stockCode,
                 FID_INPUT_DATE_1: startDate,
                 FID_INPUT_DATE_2: endDate,
-                FID_PERIOD_DIV_CODE: 'D',
+                FID_PERIOD_DIV_CODE: periodDivCode,
                 FID_ORG_ADJ_PRC: '0',
             },
         });

@@ -27,6 +27,7 @@ interface UserAttributes {
   pin_hash?: string | null
   is_survey_completed: boolean
   investment_type_id?: number | null
+  profile_image_url?: string | null
 }
 
 interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'is_survey_completed' | 'investment_type_id'> {}
@@ -60,6 +61,7 @@ class User
   public created_at?: Date
   public updated_at?: Date
   public deleted_at?: Date
+  public profile_image_url?: string | null
 }
 
 User.init(

@@ -10,7 +10,9 @@ import { connectDB } from './config/database'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
 import virtualTradeRouter from './routes/trade/virtualTradeRouter'
+import realTradeRouter from './routes/trade/realTradeRouter'
 import surveyRouter from './routes/user/surveyRouter'
+import userRouter from './routes/user/userRouter'
 
 // 스케줄러
 import stockPriceRouter from './routes/market/StockPrice'
@@ -58,7 +60,9 @@ app.use(cors({
 app.use('/api/auth', authRouter)
 app.use('/api/test', contractTestRouter)
 app.use('/api/trade/virtual', virtualTradeRouter)
+app.use('/api/trade/real', realTradeRouter)
 app.use('/api/survey', surveyRouter)
+app.use('/api/user', userRouter)
 
 // 스케줄러 라우터
 app.use('/api/market/stock-prices', stockPriceRouter)
@@ -71,7 +75,7 @@ connectDB()
 httpServer.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
     // 1단계
-    //startStockPriceScheduler() //일봉
+    startStockPriceScheduler() //일봉
     //startMarketIndexScheduler() //미국주요지수
 
 // 2단계

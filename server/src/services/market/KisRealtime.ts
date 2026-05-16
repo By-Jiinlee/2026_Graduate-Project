@@ -22,6 +22,7 @@ const FULL_CRAWL_ENABLED = process.env.ENABLE_FULL_CRAWL === 'true'
 export const priceMap      = new Map<string, number>()
 export const changeMap     = new Map<string, number>()
 export const changeRateMap = new Map<string, number>()
+export const volumeMap     = new Map<string, number>()
 
 // ─── priceMap 영속화 (재시작 시 복원) ────────────────────────
 const CACHE_PATH = path.join(__dirname, '../../../cache/priceCache.json')
@@ -264,6 +265,7 @@ const startFullCrawler = async (io: Server): Promise<void> => {
                     priceMap.set(result.code, result.price)
                     changeMap.set(result.code, result.change)
                     changeRateMap.set(result.code, result.changeRate)
+                    volumeMap.set(result.code, result.volume)
                     io.emit('stock:price', result)
                     updated++
                 }
@@ -309,6 +311,7 @@ const doFetch = async (code: string, io: Server) => {
         priceMap.set(result.code, result.price)
         changeMap.set(result.code, result.change)
         changeRateMap.set(result.code, result.changeRate)
+        volumeMap.set(result.code, result.volume)
         io.emit('stock:price', result)
     }
 }

@@ -151,15 +151,23 @@ export const verifySignature = async (
   nonce: bigint,
   signature: string,
 ): Promise<boolean> => {
-  const { request } = await publicClient.simulateContract({
-    address: contractAddress,
-    abi,
-    functionName: 'verifySignature',
-    args: [getAddress(walletAddress), nonce, signature as `0x${string}`],
-    account,
-  })
-  await walletClient.writeContract(request)
-  return true
+  try {
+    const { request } = await publicClient.simulateContract({
+      address: contractAddress,
+      abi,
+      functionName: 'verifySignature',
+      args: [getAddress(walletAddress), nonce, signature as `0x${string}`],
+      account,
+    })
+    await walletClient.writeContract(request)
+    return true
+  } catch (e: any) {
+    const msg: string = e?.message ?? ''
+    if (msg.includes('Invalid signature') || msg.includes('reverted')) {
+      throw new Error('MetaMask 서명이 올바르지 않습니다. 등록된 지갑 주소로 서명해주세요.')
+    }
+    throw e
+  }
 }
 
 // 거래 서명 검증
@@ -170,21 +178,29 @@ export const verifyTradeSignature = async (
   stockCode: string,
   signature: string,
 ): Promise<boolean> => {
-  const { request } = await publicClient.simulateContract({
-    address: contractAddress,
-    abi,
-    functionName: 'verifyTradeSignature',
-    args: [
-      getAddress(walletAddress),
-      nonce,
-      amount,
-      stockCode,
-      signature as `0x${string}`,
-    ],
-    account,
-  })
-  await walletClient.writeContract(request)
-  return true
+  try {
+    const { request } = await publicClient.simulateContract({
+      address: contractAddress,
+      abi,
+      functionName: 'verifyTradeSignature',
+      args: [
+        getAddress(walletAddress),
+        nonce,
+        amount,
+        stockCode,
+        signature as `0x${string}`,
+      ],
+      account,
+    })
+    await walletClient.writeContract(request)
+    return true
+  } catch (e: any) {
+    const msg: string = e?.message ?? ''
+    if (msg.includes('Invalid signature') || msg.includes('reverted')) {
+      throw new Error('MetaMask 서명이 올바르지 않습니다. 등록된 지갑 주소로 서명해주세요.')
+    }
+    throw e
+  }
 }
 export const signMessage = async (
   message: `0x${string}`,

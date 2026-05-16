@@ -48,9 +48,19 @@ const StockList: React.FC = () => {
   useEffect(() => {
     fetchStocks();
     
-    // 로컬 스토리지에서 기존 즐겨찾기 불러오기
-    const savedFavs = localStorage.getItem('uptick_favs');
-    if (savedFavs) setFavorites(JSON.parse(savedFavs));
+    // 관심종목 불러오기 (로그인 시 서버, 비로그인 시 localStorage)
+    if (loggedIn) {
+      fetch('http://localhost:3000/api/user/favorites', { credentials: 'include' })
+        .then(r => r.json())
+        .then(data => { if (Array.isArray(data.stock_ids)) setFavorites(data.stock_ids) })
+        .catch(() => {
+          const saved = localStorage.getItem('uptick_favs')
+          if (saved) setFavorites(JSON.parse(saved))
+        })
+    } else {
+      const saved = localStorage.getItem('uptick_favs')
+      if (saved) setFavorites(JSON.parse(saved))
+    }
 
     // 실시간 시세 구독
     const socket = io('http://localhost:3000');
@@ -68,13 +78,29 @@ const StockList: React.FC = () => {
   }, []);
 
   const toggleFavorite = (e: React.MouseEvent, id: number) => {
-    e.stopPropagation();
-    const newFavs = favorites.includes(id) 
-      ? favorites.filter(favId => favId !== id) 
-      : [...favorites, id];
-    setFavorites(newFavs);
-    localStorage.setItem('uptick_favs', JSON.stringify(newFavs));
-  };
+    e.stopPropagation()
+    const isAdding = !favorites.includes(id)
+    const newFavs = isAdding ? [...favorites, id] : favorites.filter(favId => favId !== id)
+    setFavorites(newFavs)
+
+    if (loggedIn) {
+      if (isAdding) {
+        fetch('http://localhost:3000/api/user/favorites', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stock_id: id }),
+        }).catch(() => {})
+      } else {
+        fetch(`http://localhost:3000/api/user/favorites/${id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        }).catch(() => {})
+      }
+    } else {
+      localStorage.setItem('uptick_favs', JSON.stringify(newFavs))
+    }
+  }
 
   // 👇 [핵심 수정] ETF 종목을 이름 기반으로 확실하게 걸러냅니다.
   const filteredStocks = useMemo(() => {
@@ -130,9 +156,19 @@ const StockList: React.FC = () => {
     const draggedItem = newFavs.splice(draggedIdx, 1)[0];
     newFavs.splice(dropIndex, 0, draggedItem);
     
-    setFavorites(newFavs);
-    localStorage.setItem('uptick_favs', JSON.stringify(newFavs));
-    setDraggedIdx(null);
+    setFavorites(newFavs)
+    setDraggedIdx(null)
+
+    if (loggedIn) {
+      fetch('http://localhost:3000/api/user/favorites/reorder', {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_ids: newFavs }),
+      }).catch(() => {})
+    } else {
+      localStorage.setItem('uptick_favs', JSON.stringify(newFavs))
+    }
   };
 
   if (loading) return <div className="flex justify-center items-center h-screen">로딩 중...</div>;
