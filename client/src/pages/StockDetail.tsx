@@ -77,9 +77,6 @@ export default function StockDetail() {
     const [minuteCandles, setMinuteCandles] = useState<CandleBar[]>([])
     const [minuteLoaded, setMinuteLoaded] = useState(false)
     const [minuteLoading, setMinuteLoading] = useState(false)
-    const [weekCandles, setWeekCandles] = useState<CandleBar[]>([])
-    const [weekLoaded, setWeekLoaded] = useState(false)
-    const [weekLoading, setWeekLoading] = useState(false)
     const [histData, setHistData] = useState<CandleBar[]>([])
     const [histLoading, setHistLoading] = useState(false)
     const kisCache = useRef<Map<string, CandleBar[]>>(new Map())
@@ -128,41 +125,7 @@ export default function StockDetail() {
             .finally(() => setMinuteLoading(false))
     }, [needsMinute, minuteLoaded, stockId])
 
-    // 선차트 1주: 과거 5거래일 분봉 데이터 수집
-    const needsWeek = chartMode === 'line' && linePeriod === '1w'
-    useEffect(() => {
-        if (!needsWeek || weekLoaded || !stockId) return
-
-        // KST 기준 최근 5 평일 (YYYYMMDD)
-        const getPastWeekdays = (count: number): string[] => {
-            const days: string[] = []
-            const d = new Date(Date.now() + 9 * 3600 * 1000)
-            while (days.length < count) {
-                const dow = d.getUTCDay()
-                if (dow !== 0 && dow !== 6) {
-                    days.unshift(d.toISOString().slice(0, 10).replace(/-/g, ''))
-                }
-                d.setUTCDate(d.getUTCDate() - 1)
-            }
-            return days
-        }
-
-        const weekdays = getPastWeekdays(5)
-        setWeekLoading(true)
-        Promise.all(
-            weekdays.map(date =>
-                axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/minute?interval=1&date=${date}`)
-                    .then(res => (res.data.candles ?? []) as CandleBar[])
-                    .catch(() => [] as CandleBar[])
-            )
-        ).then(results => {
-            const combined = results.flat().sort((a, b) => a.time.localeCompare(b.time))
-            setWeekCandles(combined)
-            setWeekLoaded(true)
-        }).finally(() => setWeekLoading(false))
-    }, [needsWeek, weekLoaded, stockId])
-
-    // KIS 히스토리 직접 조회 (분봉·일봉 제외, 탭 전환 시 캐시 우선)
+    // KIS 히스토리 직접 조회 (분봉 제외, 탭 전환 시 캐시 우선)
     useEffect(() => {
         if (!stockId) return
 
@@ -181,7 +144,7 @@ export default function StockDetail() {
             // 선차트: 단기=일봉(D), 중기=주봉(W), 장기=월봉(M)
             const map: Record<LinePeriod, { code: 'D'|'W'|'M'; days: number } | null> = {
                 '1d':  null,
-                '1w':  null,   // 1w는 분봉 5거래일 방식 → 별도 fetch
+                '1w':  { code: 'D', days: 7    },  // KIS 일봉 최근 5거래일
                 '3m':  { code: 'D', days: 90   },
                 '1y':  { code: 'W', days: 365  },
                 '3y':  { code: 'M', days: 1095 },
@@ -210,6 +173,7 @@ export default function StockDetail() {
         }
 
         setHistLoading(true)
+        setHistData([])
         axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/history`, {
             params: { period_code: periodCode, from, to: kstDate() },
         })
@@ -228,17 +192,6 @@ export default function StockDetail() {
             if (linePeriod === '1d') {
                 return {
                     chartItems: minuteCandles.map(c => ({
-                        time:  datetimeToTs(c.time),
-                        value: Number(c.close),
-                    })),
-                    isMinute: true,
-                    isLine:   true,
-                }
-            }
-            if (linePeriod === '1w') {
-                // 5거래일 분봉 데이터 (UTCTimestamp, 다중일)
-                return {
-                    chartItems: weekCandles.map(c => ({
                         time:  datetimeToTs(c.time),
                         value: Number(c.close),
                     })),
@@ -278,7 +231,7 @@ export default function StockDetail() {
             isMinute: false,
             isLine:   false,
         }
-    }, [chartMode, linePeriod, candleType, histData, minuteCandles, weekCandles])
+    }, [chartMode, linePeriod, candleType, histData, minuteCandles])
 
     // 차트 생성/재생성
     useEffect(() => {
@@ -312,44 +265,44 @@ export default function StockDetail() {
                     const mode   = chartModeRef.current
                     const period = linePeriodRef.current
                     const ctype  = candleTypeRef.current
+                    const isNum  = typeof time === 'number'
 
-                    if (typeof time === 'number') {
-                        const isSubHour = (mode === 'line' && (period === '1d' || period === '1w')) ||
-                                          (mode === 'candle' && (ctype === 'minute' || ctype === 'day'))
-                        if (isSubHour) {
-                            const d = new Date(time * 1000)
-                            // 1w 다중일: 날짜 경계(tickMarkType<=2)는 MM/DD로
-                            if (period === '1w' && tickMarkType != null && tickMarkType <= 2) {
-                                return `${d.getUTCMonth()+1}/${d.getUTCDate()}`
-                            }
-                            return `${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')}`
-                        }
-                        // 선차트 날짜레벨 timestamp → 날짜 포맷
+                    let y = 0, M = 0, D = 0, MM = '', HH = '', mi = ''
+                    if (isNum) {
                         const d = new Date(time * 1000)
-                        const y = d.getUTCFullYear()
-                        const mo = d.getUTCMonth() + 1
-                        const dy = d.getUTCDate()
-                        if (mode === 'line' && ['3y', '5y', '10y'].includes(period)) {
-                            return `${y}.${mo.toString().padStart(2,'0')}`
-                        }
-                        return `${mo}/${dy}`
-                    }
-
-                    let year: number, month: number, day: number
-                    if (typeof time === 'string') {
+                        y = d.getUTCFullYear(); M = d.getUTCMonth() + 1; D = d.getUTCDate()
+                        MM = M.toString().padStart(2, '0')
+                        HH = d.getUTCHours().toString().padStart(2, '0')
+                        mi = d.getUTCMinutes().toString().padStart(2, '0')
+                    } else if (typeof time === 'string') {
                         const p = time.split('-')
-                        year = parseInt(p[0]); month = parseInt(p[1]); day = parseInt(p[2])
+                        y = +p[0]; M = +p[1]; D = +p[2]; MM = M.toString().padStart(2, '0')
                     } else if (typeof time === 'object' && time !== null && 'year' in time) {
-                        ;({ year, month, day } = time as any)
+                        ;({ year: y, month: M, day: D } = time as any)
+                        MM = M.toString().padStart(2, '0')
                     } else {
                         return ''
                     }
 
-                    // 봉차트 월봉 → YYYY.MM, 나머지 → MM/DD
-                    if (mode === 'candle' && ctype === 'month') {
-                        return `${year}.${month.toString().padStart(2, '0')}`
+                    // 봉차트 주봉·월봉 (string/object 시간)
+                    if (!isNum) {
+                        if (ctype === 'month') return tickMarkType === 0 ? `${y}년` : `${y}.${MM}`
+                        return tickMarkType <= 1 ? `${y}.${MM}` : `${M}/${D}`
                     }
-                    return `${month}/${day}`
+
+                    // 이하 모두 UTCTimestamp 숫자 기반
+                    if (mode === 'candle') {
+                        if (ctype === 'minute') return tickMarkType <= 2 ? `${M}/${D}` : `${HH}:${mi}`
+                        if (ctype === 'day')    return tickMarkType <= 1 ? `${y}.${MM}` : `${M}/${D}`
+                        return ''
+                    }
+
+                    // 선차트
+                    if (period === '1d') return tickMarkType <= 2 ? `${M}/${D}` : `${HH}:${mi}`
+                    if (period === '1w') return tickMarkType <= 2 ? `${M}/${D}` : ''
+                    if (period === '3m') return tickMarkType <= 1 ? `${y}.${MM}` : `${M}/${D}`
+                    if (period === '1y') return tickMarkType <= 1 ? `${y}.${MM}` : `${M}/${D}`
+                    return tickMarkType === 0 ? `${y}년` : `${y}.${MM}`
                 },
             },
             rightPriceScale: { borderColor: '#e5e7eb' },
@@ -592,7 +545,7 @@ export default function StockDetail() {
                         </div>
                     </div>
 
-                    {(minuteLoading || weekLoading || histLoading) && (
+                    {(minuteLoading || histLoading) && (
                         <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '60px 0' }}>로딩 중...</div>
                     )}
                     <div ref={chartContainerRef} style={{ width: '100%' }} />

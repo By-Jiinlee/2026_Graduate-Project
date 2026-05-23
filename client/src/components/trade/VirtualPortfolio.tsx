@@ -172,9 +172,9 @@ export default function VirtualPortfolio() {
   }, [portfolio?.holdings.map(h => h.code).join(',')])
 
   useEffect(() => {
-    if (tab === 'orders'  && portfolio) fetchOrders()
-    if (tab === 'pending' && portfolio) fetchPendingOrders()
-  }, [tab, portfolio, fetchOrders, fetchPendingOrders])
+    if (tab === 'orders'  && !noAccount && !loading) fetchOrders()
+    if (tab === 'pending' && !noAccount && !loading) fetchPendingOrders()
+  }, [tab, noAccount, loading, fetchOrders, fetchPendingOrders])
 
   // ── 계좌 개설 PIN flow ────────────────────────────────────────
 

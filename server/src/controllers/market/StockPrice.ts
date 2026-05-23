@@ -181,7 +181,7 @@ export const getKisHistory = async (req: Request, res: Response): Promise<void> 
 
         const prices = await fetchDailyPrices(stock.code, from, to, periodDivCode)
 
-        const candles = prices
+        let candles = prices
             .map(p => ({
                 time:   `${p.date.slice(0, 4)}-${p.date.slice(4, 6)}-${p.date.slice(6, 8)}`,
                 open:   p.open,
@@ -191,6 +191,21 @@ export const getKisHistory = async (req: Request, res: Response): Promise<void> 
                 volume: p.volume,
             }))
             .sort((a, b) => a.time.localeCompare(b.time))
+
+        // 주봉(W) 빈 배열이면 월봉(M)으로 재시도
+        if (candles.length === 0 && periodDivCode === 'W') {
+            const mPrices = await fetchDailyPrices(stock.code, from, to, 'M')
+            candles = mPrices
+                .map(p => ({
+                    time:   `${p.date.slice(0, 4)}-${p.date.slice(4, 6)}-${p.date.slice(6, 8)}`,
+                    open:   p.open,
+                    high:   p.high,
+                    low:    p.low,
+                    close:  p.close,
+                    volume: p.volume,
+                }))
+                .sort((a, b) => a.time.localeCompare(b.time))
+        }
 
         res.json({ success: true, candles })
     } catch (err) {
