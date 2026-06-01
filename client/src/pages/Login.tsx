@@ -201,6 +201,7 @@ export default function Login() {
                   placeholder="이메일을 입력하세요"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="off"
                   style={inputStyle}
                 />
               </div>
@@ -222,6 +223,7 @@ export default function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleLoginStep1()}
+                  autoComplete="new-password"
                   style={inputStyle}
                 />
               </div>

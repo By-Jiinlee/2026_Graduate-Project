@@ -1,6 +1,45 @@
-console.log('[anomalyMiddleware] 로드됨')
 import { Request, Response, NextFunction } from 'express'
 import { analyzeLoginAttempt, isAccountLocked } from '../../services/auth/anomalyService'
+import { checkIPAbuse } from '../../services/auth/abuseIPDBService'
+import { blockIP } from '../security/ipBlockMiddleware'
+import AnomalyLog from '../../models/auth/AnomalyLog'
+import { getClientIp } from '../../utils/getClientIp'
+
+// ─────────────────────────────────────────────
+// 0. AbuseIPDB — 알려진 악성 IP 차단
+// login/step1 및 register 앞에 배치
+// ─────────────────────────────────────────────
+export async function checkAbuseIP(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const ip = getClientIp(req)
+
+  try {
+    const { isAbusive, score } = await checkIPAbuse(ip)
+    if (!isAbusive) {
+      next()
+      return
+    }
+
+    blockIP(ip)
+
+    await AnomalyLog.create({
+      user_id: null,
+      email: req.body.email ?? null,
+      ip,
+      user_agent: req.headers['user-agent'] ?? null,
+      anomaly_type: 'ABUSE_IP',
+      action: 'BLOCK',
+      detail: `AbuseIPDB 악성 IP 탐지: 점수 ${score}/100`,
+      country: null,
+    })
+
+    res.status(403).json({
+      message: '비정상적인 접근으로 차단되었습니다.',
+      code: 'IP_BLOCKED',
+    })
+  } catch {
+    next() // fail-open: AbuseIPDB 장애 시 정상 처리
+  }
+}
 
 // ─────────────────────────────────────────────
 // 1. 로그인 전 — 계정 잠금 확인
@@ -53,9 +92,6 @@ export async function analyzeAfterLogin(
 ): Promise<void> {
   const { loginSuccess, loginEmail, loginUserId, responseData, responseStatus } = res.locals
 
-  console.log('[anomaly] analyzeAfterLogin 실행됨')
-  console.log('[anomaly] locals:', { loginSuccess, loginEmail, loginUserId })
-
   // loginEmail 없으면 이상탐지 대상 아님 — 그대로 응답
   if (!loginEmail) {
     res.status(responseStatus ?? 400).json(responseData)
@@ -74,9 +110,8 @@ export async function analyzeAfterLogin(
       ip,
       userAgent: req.headers['user-agent'],
       success: loginSuccess ?? false,
+      isStep2: res.locals.isStep2 ?? false,
     })
-
-    console.log('[anomaly] 분석 결과:', anomalyResult)
 
     // 계정 잠금
     if (anomalyResult.locked) {

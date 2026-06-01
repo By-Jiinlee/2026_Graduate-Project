@@ -256,15 +256,16 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
         investment_type_id: user.investment_type_id ?? null,
       },
     }
-    res.locals.resopnseStatus = 200
+    res.locals.responseStatus = 200
+    res.locals.isStep2 = true
     return next() // <- analyzeAfterLogin 으로 넘김
   } catch (error: any) {
     res.locals.loginSuccess = false
     res.locals.loginEmail = req.body.email ?? ''
     res.locals.responseData = { message: error.message }
     res.locals.responseStatus = 400
+    res.locals.isStep2 = true
     return next()
-    //return res.status(400).json({ message: error.message })
   }
 }
 

@@ -49,6 +49,15 @@ const CANDLE_TYPES: { key: CandleType; label: string }[] = [
     { key: 'month',  label: '월봉' },
 ]
 
+// KST 기준 평일 장 중(09:00-15:30) 또는 시간외(16:00-18:00)인지 확인
+const isChartUpdateAllowed = (): boolean => {
+    const d = new Date(Date.now() + 9 * 3600 * 1000)
+    const dow = d.getUTCDay()
+    if (dow === 0 || dow === 6) return false
+    const m = d.getUTCHours() * 60 + d.getUTCMinutes()
+    return (m >= 9 * 60 && m < 15 * 60 + 30) || (m >= 16 * 60 && m < 18 * 60)
+}
+
 // "YYYY-MM-DD" → UTCTimestamp (자정 UTC)
 const dateToTs = (d: string): UTCTimestamp =>
     Math.floor(new Date(d + 'T00:00:00Z').getTime() / 1000) as UTCTimestamp
@@ -387,7 +396,7 @@ export default function StockDetail() {
             if (data.code !== info.code) return
             setLivePrice({ price: data.price, change: data.change, changeRate: data.changeRate, volume: data.volume })
 
-            if (!seriesRef.current) return
+            if (!seriesRef.current || !isChartUpdateAllowed()) return
             const mode = chartModeRef.current
             const period = linePeriodRef.current
 

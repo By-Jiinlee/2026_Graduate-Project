@@ -121,7 +121,12 @@ export const sendDeviceRevokedAlert = async (
 // 이상 로그인 시도 감지 알림
 export const sendAnomalyAlertEmail = async (
   email: string,
-  reasons: string[],
+  ctx: {
+    reasons: string[]
+    ip: string
+    location: string
+    userAgent: string
+  },
 ): Promise<void> => {
   const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
 
@@ -130,15 +135,41 @@ export const sendAnomalyAlertEmail = async (
     to: email,
     subject: '[UpTick] 비정상 로그인 시도가 감지되었습니다',
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-        <h2 style="color: #e53935;">보안 알림</h2>
-        <p>회원님의 계정에서 비정상적인 로그인 시도가 감지되었습니다.</p>
+      <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto;">
+        <h2 style="color: #e53935;">⚠️ 보안 알림</h2>
+        <p>회원님의 계정에서 비정상적인 접근이 감지되었습니다.</p>
+
         <div style="background: #fff3f3; border-left: 4px solid #e53935; border-radius: 4px; padding: 16px; margin: 20px 0;">
-          <p style="margin: 0 0 8px 0; font-weight: bold;">감지된 항목</p>
-          ${reasons.map(r => `<p style="margin: 4px 0; color: #555;">• ${r}</p>`).join('')}
+          <p style="margin: 0 0 8px 0; font-weight: bold; color: #c62828;">감지된 항목</p>
+          ${ctx.reasons.map(r => `<p style="margin: 4px 0; color: #555;">• ${r}</p>`).join('')}
         </div>
-        <p style="margin: 4px 0; color: #888; font-size: 13px;">감지 시각: ${timeStr}</p>
-        <p style="color: #888; font-size: 13px; margin-top: 16px;">본인이 맞다면 이 메일을 무시해주세요. 본인이 아니라면 즉시 비밀번호를 변경해주세요.</p>
+
+        <div style="background: #f5f5f5; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 0 0 10px 0; font-weight: bold; color: #333;">접속 정보</p>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <tr>
+              <td style="padding: 5px 0; color: #888; width: 80px;">IP 주소</td>
+              <td style="padding: 5px 0; color: #333; font-family: monospace;">${ctx.ip}</td>
+            </tr>
+            <tr>
+              <td style="padding: 5px 0; color: #888;">위치</td>
+              <td style="padding: 5px 0; color: #333;">${ctx.location}</td>
+            </tr>
+            <tr>
+              <td style="padding: 5px 0; color: #888;">감지 시각</td>
+              <td style="padding: 5px 0; color: #333;">${timeStr}</td>
+            </tr>
+            <tr>
+              <td style="padding: 5px 0; color: #888; vertical-align: top;">브라우저</td>
+              <td style="padding: 5px 0; color: #555; font-size: 11px; word-break: break-all;">${ctx.userAgent}</td>
+            </tr>
+          </table>
+        </div>
+
+        <p style="color: #888; font-size: 13px; margin-top: 16px;">
+          본인이 맞다면 이 메일을 무시해주세요.<br>
+          본인이 아니라면 즉시 비밀번호를 변경하고 로그아웃해주세요.
+        </p>
       </div>
     `,
   })

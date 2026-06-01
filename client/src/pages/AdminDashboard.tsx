@@ -1,0 +1,379 @@
+import { useState, useEffect, useCallback } from 'react'
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line, Legend,
+} from 'recharts'
+
+const API = 'http://localhost:3000/api/admin/security'
+
+const TYPE_META: Record<string, { label: string; color: string }> = {
+  BRUTE_FORCE:        { label: '브루트포스',    color: '#e53935' },
+  ABNORMAL_TIME:      { label: '비정상 시간대', color: '#fb8c00' },
+  CONCURRENT_SESSION: { label: '동시 세션',    color: '#8e24aa' },
+  ABNORMAL_COUNTRY:   { label: '비정상 국가',  color: '#1e88e5' },
+  HONEYPOT:           { label: '허니팟',       color: '#b71c1c' },
+  ABUSE_IP:           { label: '악성 IP',      color: '#d84315' },
+}
+
+const ACTION_META: Record<string, { label: string; color: string }> = {
+  ALERT: { label: '경고', color: '#fb8c00' },
+  BLOCK: { label: '차단', color: '#e53935' },
+  LOCK:  { label: '잠금', color: '#8e24aa' },
+}
+
+type Stats = { total: number; today: number; locked: number; blockedIPs: number; honeypotHits: number }
+type AnomalyLog = {
+  id: number; email: string | null; ip: string; anomaly_type: string
+  action: string; detail: string; country: string | null; resolved: boolean; created_at: string
+}
+type LockedUser = { id: number; email: string; name: string; created_at: string }
+type ChartRow = { anomaly_type?: string; date?: string; count: number }
+
+const g = fetch  // alias for cleaner call sites
+
+export default function AdminDashboard() {
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [chartType, setChartType] = useState<ChartRow[]>([])
+  const [chartDay, setChartDay] = useState<ChartRow[]>([])
+  const [honeypots, setHoneypots] = useState<AnomalyLog[]>([])
+  const [logs, setLogs] = useState<AnomalyLog[]>([])
+  const [logTotal, setLogTotal] = useState(0)
+  const [logPage, setLogPage] = useState(1)
+  const [logTypeFilter, setLogTypeFilter] = useState('')
+  const [lockedUsers, setLockedUsers] = useState<LockedUser[]>([])
+  const [blockedIPs, setBlockedIPs] = useState<string[]>([])
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true)
+    try {
+      const opt = { credentials: 'include' as const }
+      const [s, ct, cd, hp, la, bi] = await Promise.all([
+        g(`${API}/stats`, opt).then(r => r.json()),
+        g(`${API}/chart/by-type`, opt).then(r => r.json()),
+        g(`${API}/chart/by-day`, opt).then(r => r.json()),
+        g(`${API}/honeypot-hits`, opt).then(r => r.json()),
+        g(`${API}/locked-accounts`, opt).then(r => r.json()),
+        g(`${API}/blocked-ips`, opt).then(r => r.json()),
+      ])
+      setStats(s)
+      setChartType(ct.map((r: ChartRow) => ({ ...r, label: TYPE_META[r.anomaly_type!]?.label ?? r.anomaly_type, count: Number(r.count) })))
+      setChartDay(cd.map((r: ChartRow) => ({ ...r, count: Number(r.count) })))
+      setHoneypots(Array.isArray(hp) ? hp : [])
+      setLockedUsers(la.users ?? [])
+      setBlockedIPs(bi.ips ?? [])
+      setLastUpdated(new Date())
+    } catch { /* ignore */ } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const fetchLogs = useCallback(async () => {
+    const params = new URLSearchParams({ page: String(logPage), limit: '20' })
+    if (logTypeFilter) params.set('type', logTypeFilter)
+    const res = await g(`${API}/anomaly-logs?${params}`, { credentials: 'include' })
+    const data = await res.json()
+    setLogs(data.logs)
+    setLogTotal(data.total)
+  }, [logPage, logTypeFilter])
+
+  useEffect(() => { fetchAll() }, [fetchAll])
+  useEffect(() => { fetchLogs() }, [fetchLogs])
+
+  // 30초 자동 새로고침
+  useEffect(() => {
+    const t = setInterval(() => { fetchAll(); fetchLogs() }, 30000)
+    return () => clearInterval(t)
+  }, [fetchAll, fetchLogs])
+
+  const handleUnlock = async (userId: number, email: string) => {
+    if (!confirm(`${email} 계정 잠금을 해제하시겠습니까?`)) return
+    const res = await g(`${API}/users/${userId}/unlock`, { method: 'PATCH', credentials: 'include' })
+    const d = await res.json()
+    alert(d.message)
+    fetchAll()
+  }
+
+  const handleUnblockIP = async (ip: string) => {
+    if (!confirm(`${ip} 차단을 해제하시겠습니까?`)) return
+    const res = await g(`${API}/blocked-ips/${encodeURIComponent(ip)}`, { method: 'DELETE', credentials: 'include' })
+    const d = await res.json()
+    alert(d.message)
+    fetchAll()
+  }
+
+  // ── 스타일 상수 ──────────────────────────────────────────
+  const section: React.CSSProperties = {
+    backgroundColor: '#fff', borderRadius: '16px', padding: '24px',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.07)', marginBottom: '20px',
+  }
+  const sectionTitle: React.CSSProperties = {
+    fontSize: '15px', fontWeight: 700, color: '#1a1a1a', marginBottom: '16px',
+  }
+  const th: React.CSSProperties = {
+    padding: '10px 14px', textAlign: 'left', fontSize: '12px', fontWeight: 700,
+    color: '#888', borderBottom: '2px solid #f0f0f0', whiteSpace: 'nowrap',
+  }
+  const td: React.CSSProperties = {
+    padding: '10px 14px', fontSize: '13px', color: '#333',
+    borderBottom: '1px solid #f8f8f8', verticalAlign: 'middle',
+  }
+  const btn = (bg: string, color = '#fff'): React.CSSProperties => ({
+    padding: '6px 14px', backgroundColor: bg, color, border: 'none',
+    borderRadius: '7px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+  })
+  const badge = (color: string): React.CSSProperties => ({
+    padding: '3px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: 700,
+    backgroundColor: color + '20', color,
+  })
+
+  const totalPages = Math.ceil(logTotal / 20)
+
+  return (
+    <div style={{ minHeight: '100vh', backgroundColor: '#f4f6f9', padding: '32px 28px', fontFamily: 'sans-serif' }}>
+      <div style={{ maxWidth: '1300px', margin: '0 auto' }}>
+
+        {/* 헤더 */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '28px' }}>
+          <div>
+            <h1 style={{ fontSize: '22px', fontWeight: 'bold', color: '#1a1a1a', margin: 0 }}>
+              보안 관제 대시보드
+            </h1>
+            <p style={{ fontSize: '12px', color: '#aaa', marginTop: '4px', margin: '4px 0 0' }}>
+              {lastUpdated ? `마지막 갱신: ${lastUpdated.toLocaleTimeString('ko-KR')} · 30초마다 자동 새로고침` : '로딩 중...'}
+            </p>
+          </div>
+          <button onClick={() => { fetchAll(); fetchLogs() }} disabled={loading}
+            style={{ ...btn('#3CB371'), padding: '10px 20px', fontSize: '13px', opacity: loading ? 0.6 : 1 }}>
+            {loading ? '갱신 중...' : '새로고침'}
+          </button>
+        </div>
+
+        {/* ── 1. 요약 통계 카드 ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '20px' }}>
+          {[
+            { label: '전체 이상탐지', value: stats?.total ?? '—', color: '#1e88e5', icon: '🔍' },
+            { label: '오늘 탐지',     value: stats?.today ?? '—', color: '#e53935', icon: '⚡' },
+            { label: '허니팟 히트',  value: stats?.honeypotHits ?? '—', color: '#b71c1c', icon: '🍯' },
+            { label: '잠긴 계정',    value: stats?.locked ?? '—', color: '#8e24aa', icon: '🔒' },
+            { label: '차단된 IP',    value: stats?.blockedIPs ?? '—', color: '#fb8c00', icon: '🚫' },
+          ].map(card => (
+            <div key={card.label} style={{
+              backgroundColor: '#fff', borderRadius: '14px', padding: '20px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.06)', borderTop: `4px solid ${card.color}`,
+            }}>
+              <div style={{ fontSize: '22px', marginBottom: '8px' }}>{card.icon}</div>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: card.color }}>{card.value.toLocaleString()}</div>
+              <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>{card.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── 2. 차트 ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+
+          {/* 유형별 탐지 현황 */}
+          <div style={section}>
+            <p style={sectionTitle}>유형별 탐지 현황</p>
+            {chartType.length === 0
+              ? <p style={{ textAlign: 'center', color: '#ccc', padding: '40px 0' }}>탐지 데이터 없음</p>
+              : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={chartType} margin={{ top: 0, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip formatter={(v: number) => [`${v}건`, '탐지 수']} />
+                    <Bar dataKey="count" radius={[6, 6, 0, 0]}
+                      fill="#3CB371"
+                      label={{ position: 'top', fontSize: 11, fill: '#555' }}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              )
+            }
+          </div>
+
+          {/* 7일간 탐지 추이 */}
+          <div style={section}>
+            <p style={sectionTitle}>7일간 탐지 추이</p>
+            {chartDay.length === 0
+              ? <p style={{ textAlign: 'center', color: '#ccc', padding: '40px 0' }}>탐지 데이터 없음</p>
+              : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={chartDay} margin={{ top: 0, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="date" tick={{ fontSize: 11 }}
+                      tickFormatter={(v: string) => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip formatter={(v: number) => [`${v}건`, '탐지 수']}
+                      labelFormatter={(l: string) => `날짜: ${l}`} />
+                    <Legend />
+                    <Line type="monotone" dataKey="count" stroke="#e53935" strokeWidth={2}
+                      dot={{ r: 4, fill: '#e53935' }} name="탐지 건수" />
+                  </LineChart>
+                </ResponsiveContainer>
+              )
+            }
+          </div>
+        </div>
+
+        {/* ── 3. 허니팟 히트 현황 ── */}
+        <div style={section}>
+          <p style={sectionTitle}>허니팟 히트 현황 <span style={{ fontSize: '12px', color: '#b71c1c', fontWeight: 400 }}>— 공격자/스캐너가 탐색 중인 경로</span></p>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['시각', 'IP', '탐지 경로', 'User-Agent'].map(h => <th key={h} style={th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {honeypots.length === 0
+                  ? <tr><td colSpan={4} style={{ ...td, textAlign: 'center', color: '#ccc', padding: '32px' }}>허니팟 히트 없음</td></tr>
+                  : honeypots.map(h => (
+                    <tr key={h.id}>
+                      <td style={{ ...td, color: '#888', whiteSpace: 'nowrap' }}>{new Date(h.created_at).toLocaleString('ko-KR')}</td>
+                      <td style={{ ...td, fontFamily: 'monospace', fontSize: '12px' }}>{h.ip}</td>
+                      <td style={{ ...td, color: '#b71c1c' }}>{h.detail.replace('허니팟 접근 탐지: ', '')}</td>
+                      <td style={{ ...td, color: '#aaa', fontSize: '11px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                        title={h.user_agent ?? ''}>
+                        {(h as any).user_agent ?? '—'}
+                      </td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ── 4. 잠긴 계정 + 차단 IP ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+
+          {/* 잠긴 계정 */}
+          <div style={section}>
+            <p style={sectionTitle}>잠긴 계정 관리
+              <span style={{ marginLeft: '8px', fontSize: '12px', color: '#8e24aa', fontWeight: 400 }}>
+                {lockedUsers.length > 0 ? `${lockedUsers.length}개 잠김` : '없음'}
+              </span>
+            </p>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['이름', '이메일', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {lockedUsers.length === 0
+                  ? <tr><td colSpan={3} style={{ ...td, textAlign: 'center', color: '#ccc', padding: '28px' }}>잠긴 계정 없음</td></tr>
+                  : lockedUsers.map(u => (
+                    <tr key={u.id}>
+                      <td style={td}>{u.name}</td>
+                      <td style={{ ...td, color: '#555' }}>{u.email}</td>
+                      <td style={td}>
+                        <button onClick={() => handleUnlock(u.id, u.email)} style={btn('#3CB371')}>
+                          잠금 해제
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+
+          {/* 차단된 IP */}
+          <div style={section}>
+            <p style={sectionTitle}>차단된 IP 관리
+              <span style={{ marginLeft: '8px', fontSize: '12px', color: '#fb8c00', fontWeight: 400 }}>
+                인메모리 · 서버 재시작 시 초기화
+              </span>
+            </p>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['차단 IP', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {blockedIPs.length === 0
+                  ? <tr><td colSpan={2} style={{ ...td, textAlign: 'center', color: '#ccc', padding: '28px' }}>차단된 IP 없음</td></tr>
+                  : blockedIPs.map(ip => (
+                    <tr key={ip}>
+                      <td style={{ ...td, fontFamily: 'monospace', fontSize: '14px' }}>{ip}</td>
+                      <td style={td}>
+                        <button onClick={() => handleUnblockIP(ip)} style={btn('#e53935')}>
+                          차단 해제
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ── 5. 이상탐지 로그 전체 ── */}
+        <div style={section}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <p style={{ ...sectionTitle, margin: 0 }}>이상탐지 로그
+              <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888', fontWeight: 400 }}>총 {logTotal.toLocaleString()}건</span>
+            </p>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <select value={logTypeFilter} onChange={e => { setLogTypeFilter(e.target.value); setLogPage(1) }}
+                style={{ padding: '6px 12px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '12px' }}>
+                <option value="">전체 유형</option>
+                {Object.entries(TYPE_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+              <button onClick={fetchLogs} style={btn('#3CB371')}>조회</button>
+            </div>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['시각', '유형', '조치', '이메일', 'IP', '국가', '상세', '상태'].map(h => <th key={h} style={th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {logs.length === 0
+                  ? <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: '#ccc', padding: '32px' }}>로그 없음</td></tr>
+                  : logs.map(log => {
+                    const tm = TYPE_META[log.anomaly_type] ?? { label: log.anomaly_type, color: '#999' }
+                    const am = ACTION_META[log.action] ?? { label: log.action, color: '#999' }
+                    return (
+                      <tr key={log.id} style={{ backgroundColor: log.resolved ? '#fafafa' : '#fff' }}>
+                        <td style={{ ...td, whiteSpace: 'nowrap', color: '#888', fontSize: '12px' }}>
+                          {new Date(log.created_at).toLocaleString('ko-KR')}
+                        </td>
+                        <td style={td}><span style={badge(tm.color)}>{tm.label}</span></td>
+                        <td style={td}><span style={badge(am.color)}>{am.label}</span></td>
+                        <td style={{ ...td, color: '#555' }}>{log.email ?? '—'}</td>
+                        <td style={{ ...td, fontFamily: 'monospace', fontSize: '12px' }}>{log.ip}</td>
+                        <td style={td}>{log.country ?? '—'}</td>
+                        <td style={{ ...td, maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                          title={log.detail}>{log.detail}</td>
+                        <td style={td}>
+                          <span style={{ color: log.resolved ? '#3CB371' : '#e53935', fontWeight: 600, fontSize: '12px' }}>
+                            {log.resolved ? '해결됨' : '미해결'}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })
+                }
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '16px' }}>
+              <button onClick={() => setLogPage(p => Math.max(1, p - 1))} disabled={logPage === 1}
+                style={{ ...btn('#eee', '#555'), opacity: logPage === 1 ? 0.5 : 1 }}>이전</button>
+              <span style={{ lineHeight: '30px', fontSize: '13px', color: '#555' }}>{logPage} / {totalPages}</span>
+              <button onClick={() => setLogPage(p => Math.min(totalPages, p + 1))} disabled={logPage === totalPages}
+                style={{ ...btn('#eee', '#555'), opacity: logPage === totalPages ? 0.5 : 1 }}>다음</button>
+            </div>
+          )}
+        </div>
+
+      </div>
+    </div>
+  )
+}

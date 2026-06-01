@@ -1,11 +1,10 @@
-console.log('[anomalyService] 로드됨')
 import { Op, literal } from 'sequelize'
 import AnomalyLog, { AnomalyType, AnomalyAction } from '../../models/auth/AnomalyLog'
 import LoginAttempt from '../../models/auth/LoginAttempt'
 import LoginRecord from '../../models/auth/LoginRecord'
 import User from '../../models/user/User'
 import { sendAnomalyAlertEmail } from './emailService'
-import { codexTestnet } from 'viem/chains'
+import { getLocationFromIp } from '../../utils/getLocationFromIp'
 
 // ─────────────────────────────────────────────
 // 설정 상수
@@ -40,28 +39,35 @@ export interface LoginContext {
   ip: string
   userAgent?: string
   success: boolean
+  isStep2?: boolean  // Step2(MetaMask)에서 호출 시 true — 시도 기록 중복 방지용
 }
 
 export interface AnomalyResult {
   blocked: boolean
   locked: boolean
   anomalies: AnomalyType[]
-  reasons: string[]
+  reasons: string[]        // DB/관리자용 기술적 상세
+  userMessages: string[]   // 사용자 이메일 표시용 친화적 메시지
 }
+
+// 이메일 알림 쿨다운 — userId당 30분 이내 중복 발송 방지
+const emailCooldown = new Map<number, number>()
+const EMAIL_COOLDOWN_MS = 30 * 60 * 1000
 
 // ─────────────────────────────────────────────
 // 메인 진입점 — loginStep1/Step2 완료 후 호출
 // ─────────────────────────────────────────────
 export async function analyzeLoginAttempt(ctx: LoginContext): Promise<AnomalyResult> {
-  const result: AnomalyResult = { blocked: false, locked: false, anomalies: [], reasons: [] }
+  const result: AnomalyResult = { blocked: false, locked: false, anomalies: [], reasons: [], userMessages: [] }
 
-  // 시도 기록 저장
-  await recordLoginAttempt(ctx)
+  // 시도 기록 저장 — Step2는 Step1에서 이미 기록했으므로 스킵 (이중 카운트 방지)
+  if (!ctx.isStep2) await recordLoginAttempt(ctx)
 
   // 병렬 탐지 실행
+  // ABNORMAL_TIME/CONCURRENT_SESSION/ABNORMAL_COUNTRY는 로그인 성공 시에만 의미 있음
   const [bruteForce, abnormalTime, concurrentSession, abnormalCountry] = await Promise.all([
     detectBruteForce(ctx),
-    detectAbnormalTime(ctx),
+    ctx.success && ctx.userId ? detectAbnormalTime(ctx) : null,
     ctx.success && ctx.userId ? detectConcurrentSession(ctx.userId, ctx.ip, ctx.email, ctx.userAgent) : null,
     ctx.success && ctx.userId ? detectAbnormalCountry(ctx.userId, ctx.ip, ctx.email, ctx.userAgent) : null,
   ])
@@ -70,13 +76,27 @@ export async function analyzeLoginAttempt(ctx: LoginContext): Promise<AnomalyRes
     if (!detected) continue
     result.anomalies.push(detected.type)
     result.reasons.push(detected.detail)
+    result.userMessages.push(detected.userMessage)
     if (detected.action === 'LOCK') result.locked = true
     if (detected.action === 'BLOCK') result.blocked = true
   }
 
-  // 이상 감지 시 이메일 알림 (SMS 비활성화 상태이므로 이메일만)
-  if (result.anomalies.length > 0 && ctx.userId) {
-    await notifyByEmail(ctx.userId, result).catch(console.error)
+  // 이상 감지 시 이메일 알림 — 30분 쿨다운으로 중복 발송 방지
+  if (result.anomalies.length > 0) {
+    // userId가 없는 경우(로그인 실패) 이메일로 유저 조회 (계정 잠금 알림 보장)
+    const notifyUserId = ctx.userId ?? (
+      result.locked
+        ? await User.findOne({ where: { email: ctx.email } }).then(u => u?.id ?? null).catch(() => null)
+        : null
+    )
+    if (notifyUserId) {
+      const now = Date.now()
+      const lastSent = emailCooldown.get(notifyUserId) ?? 0
+      if (now - lastSent > EMAIL_COOLDOWN_MS) {
+        emailCooldown.set(notifyUserId, now)
+        await notifyByEmail(notifyUserId, ctx, result).catch(console.error)
+      }
+    }
   }
 
   return result
@@ -100,6 +120,7 @@ async function detectBruteForce(ctx: LoginContext) {
     LoginAttempt.count({
       where: {
         ip: ctx.ip,
+        identifier_type: 'IP',
         success: false,
         created_at: { [Op.gte]: windowStart },
       },
@@ -127,16 +148,19 @@ async function detectBruteForce(ctx: LoginContext) {
     ? `${CONFIG.BRUTE_FORCE.WINDOW_MINUTES}분 내 로그인 실패 ${failsByEmail}회 → 계정 잠금`
     : `${CONFIG.BRUTE_FORCE.WINDOW_MINUTES}분 내 IP(${ctx.ip}) 실패 ${failsByIp}회 → IP 차단`
 
+  const userMessage = emailExceeded
+    ? '비밀번호 오류가 반복되어 보안을 위해 계정이 잠겼습니다. 관리자에게 문의해주세요.'
+    : '동일한 위치에서 과도한 로그인 시도가 감지되었습니다.'
+
   await logAnomaly({ ...ctx, type: 'BRUTE_FORCE', action, detail })
 
-  // 계정 잠금 처리
+  // 계정 잠금 처리 — is_locked 해제는 관리자 수동 또는 별도 스케줄러로 처리
   if (action === 'LOCK' && ctx.userId) {
-  // is_locked 해제 시점은 관리자 수동 해제 또는 별도 스케줄러로 처리
-  await User.update({ is_locked: true }, { where: { id: ctx.userId } })
-  console.warn(`[Anomaly] 계정 잠금: userId=${ctx.userId}, email=${ctx.email}`)
+    await User.update({ is_locked: true }, { where: { id: ctx.userId } })
+    console.warn(`[Anomaly] 계정 잠금: userId=${ctx.userId}, email=${ctx.email}`)
   }
 
-  return { type: 'BRUTE_FORCE' as AnomalyType, action, detail }
+  return { type: 'BRUTE_FORCE' as AnomalyType, action, detail, userMessage }
 }
 
 // ─────────────────────────────────────────────
@@ -151,10 +175,12 @@ async function detectAbnormalTime(ctx: LoginContext) {
   if (!isAbnormal) return null
 
   const detail = `비정상 시간대 접속: KST ${kstHour}시 (정상 범위: ${CONFIG.ABNORMAL_TIME.NORMAL_START}~${CONFIG.ABNORMAL_TIME.NORMAL_END}시)`
+  const timeLabel = kstHour < 12 ? `오전 ${kstHour}시` : `오후 ${kstHour - 12}시`
+  const userMessage = `평소와 다른 시간대(${timeLabel})에 로그인이 감지되었습니다.`
 
   await logAnomaly({ ...ctx, type: 'ABNORMAL_TIME', action: 'ALERT', detail })
 
-  return { type: 'ABNORMAL_TIME' as AnomalyType, action: 'ALERT' as AnomalyAction, detail }
+  return { type: 'ABNORMAL_TIME' as AnomalyType, action: 'ALERT' as AnomalyAction, detail, userMessage }
 }
 
 // ─────────────────────────────────────────────
@@ -179,6 +205,9 @@ async function detectConcurrentSession(userId: number, currentIp: string, email:
   const detail = isNewIp
     ? `새로운 IP(${currentIp})에서 동시 세션 감지. 기존 활성 IP: [${activeIps.join(', ')}]`
     : `동시 세션 ${activeIps.length}개 감지 (허용: ${CONFIG.CONCURRENT_SESSION.MAX_IPS}개)`
+  const userMessage = isNewIp
+    ? '다른 위치의 기기에서 동시 접속이 감지되었습니다. 본인이 아니라면 즉시 비밀번호를 변경해주세요.'
+    : '여러 기기에서 동시에 로그인이 감지되었습니다.'
 
   await logAnomaly({
     userId,
@@ -190,23 +219,16 @@ async function detectConcurrentSession(userId: number, currentIp: string, email:
     detail
   })
 
-  return { type: 'CONCURRENT_SESSION' as AnomalyType, action: 'ALERT' as AnomalyAction, detail }
+  return { type: 'CONCURRENT_SESSION' as AnomalyType, action: 'ALERT' as AnomalyAction, detail, userMessage }
 }
 
 // ─────────────────────────────────────────────
 // 4. 비정상 국가 탐지 (LoginRecord geo 데이터 활용)
 // ─────────────────────────────────────────────
 async function detectAbnormalCountry(userId: number, currentIp: string, email: string, userAgent?: string) {
-  // 현재 IP 국가 조회
-  const currentCountry = 'United States' // 로컬 테스트용 고정값
-  // let currentCountry: string | null = null
-  // try {
-  //   const res = await fetch(`http://ip-api.com/json/${currentIp}?fields=status,country`)
-  //   const json = (await res.json()) as { status: string; country?: string }
-  //   if (json.status === 'success') currentCountry = json.country ?? null
-  // } catch {
-  //   return null // GeoIP 실패 시 스킵 (fail-open)
-  // }
+  // 현재 IP 국가 조회 (로컬/사설 IP는 country가 undefined → null 반환)
+  const geo = await getLocationFromIp(currentIp)
+  const currentCountry = geo.country ?? null
 
   if (!currentCountry) return null
 
@@ -230,6 +252,7 @@ async function detectAbnormalCountry(userId: number, currentIp: string, email: s
   if (knownCountries.includes(currentCountry)) return null
 
   const detail = `평소와 다른 국가 접속: ${currentCountry} (기존: ${knownCountries.join(', ')})`
+  const userMessage = `평소와 다른 국가(${currentCountry})에서 접속이 감지되었습니다. 본인이 아니라면 즉시 비밀번호를 변경해주세요.`
 
   await logAnomaly({
     userId,
@@ -242,7 +265,7 @@ async function detectAbnormalCountry(userId: number, currentIp: string, email: s
     country: currentCountry,
   })
 
-  return { type: 'ABNORMAL_COUNTRY' as AnomalyType, action: 'ALERT' as AnomalyAction, detail }
+  return { type: 'ABNORMAL_COUNTRY' as AnomalyType, action: 'ALERT' as AnomalyAction, detail, userMessage }
 }
 
 // ─────────────────────────────────────────────
@@ -304,8 +327,17 @@ async function logAnomaly(params: {
 // ─────────────────────────────────────────────
 // 헬퍼: 이메일 알림 (SMS 비활성화 상태)
 // ─────────────────────────────────────────────
-async function notifyByEmail(userId: number, result: AnomalyResult) {
+async function notifyByEmail(userId: number, ctx: LoginContext, result: AnomalyResult) {
   const user = await User.findByPk(userId)
   if (!user) return
-  await sendAnomalyAlertEmail(user.email, result.reasons)
+
+  // IP 위치 정보 조회 (이메일 표시용)
+  const geo = await getLocationFromIp(ctx.ip).catch(() => ({ city: undefined, region: undefined, country: undefined }))
+
+  await sendAnomalyAlertEmail(user.email, {
+    reasons: result.userMessages,
+    ip: ctx.ip,
+    location: [geo.city, geo.region, geo.country].filter(Boolean).join(', ') || '알 수 없음',
+    userAgent: ctx.userAgent ?? '알 수 없음',
+  })
 }

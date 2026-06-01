@@ -9,6 +9,9 @@ import morgan from 'morgan'
 import { connectDB } from './config/database'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
+import honeypotRouter from './routes/security/honeypotRouter'
+import adminRouter from './routes/security/adminRouter'
+import { ipBlockMiddleware } from './middleware/security/ipBlockMiddleware'
 import virtualTradeRouter from './routes/trade/virtualTradeRouter'
 import realTradeRouter from './routes/trade/realTradeRouter'
 import surveyRouter from './routes/user/surveyRouter'
@@ -56,8 +59,13 @@ app.use(cors({
     credentials: true,
 }))
 
+// 보안 미들웨어 — 모든 라우터보다 먼저 실행
+app.use(ipBlockMiddleware)  // 인메모리 IP 차단 목록 검사
+app.use(honeypotRouter)     // 허니팟 경로 탐지
+
 // 라우터
 app.use('/api/auth', authRouter)
+app.use('/api/admin/security', adminRouter)
 app.use('/api/test', contractTestRouter)
 app.use('/api/trade/virtual', virtualTradeRouter)
 app.use('/api/trade/real', realTradeRouter)

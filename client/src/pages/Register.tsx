@@ -311,6 +311,7 @@ export default function Register() {
               placeholder="비밀번호를 입력하세요"
               value={form.password}
               onChange={handleChange}
+              autoComplete="new-password"
               style={inputStyle}
             />
             {form.password && (
@@ -349,6 +350,7 @@ export default function Register() {
               placeholder="비밀번호를 다시 입력하세요"
               value={form.confirm}
               onChange={handleChange}
+              autoComplete="new-password"
               style={{
                 ...inputStyle,
                 borderColor: form.confirm

@@ -1,7 +1,8 @@
 import { DataTypes, Model, Optional } from 'sequelize'
 import sequelize from '../../config/database'
 
-export type AnomalyType = 'BRUTE_FORCE' | 'ABNORMAL_TIME' | 'CONCURRENT_SESSION' | 'ABNORMAL_COUNTRY'
+// DB 마이그레이션 필요: ALTER TABLE anomaly_logs MODIFY COLUMN anomaly_type ENUM('BRUTE_FORCE','ABNORMAL_TIME','CONCURRENT_SESSION','ABNORMAL_COUNTRY','HONEYPOT','ABUSE_IP');
+export type AnomalyType = 'BRUTE_FORCE' | 'ABNORMAL_TIME' | 'CONCURRENT_SESSION' | 'ABNORMAL_COUNTRY' | 'HONEYPOT' | 'ABUSE_IP'
 export type AnomalyAction = 'ALERT' | 'BLOCK' | 'LOCK'
 
 interface AnomalyLogAttributes {
@@ -46,7 +47,7 @@ AnomalyLog.init(
     ip: { type: DataTypes.STRING(45), allowNull: false },
     user_agent: { type: DataTypes.TEXT, allowNull: true },
     anomaly_type: {
-      type: DataTypes.ENUM('BRUTE_FORCE', 'ABNORMAL_TIME', 'CONCURRENT_SESSION', 'ABNORMAL_COUNTRY'),
+      type: DataTypes.ENUM('BRUTE_FORCE', 'ABNORMAL_TIME', 'CONCURRENT_SESSION', 'ABNORMAL_COUNTRY', 'HONEYPOT', 'ABUSE_IP'),
       allowNull: false,
     },
     action: {
