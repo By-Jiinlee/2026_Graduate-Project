@@ -1,6 +1,5 @@
 import { useState, useEffect, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { type Post } from '../data/mockPosts';
 
 export default function WritePost() {
   const navigate = useNavigate();
@@ -11,13 +10,17 @@ export default function WritePost() {
 
   const [nickname, setNickname] = useState<string | null>(null);
   const [nicknameLoading, setNicknameLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // 마운트 시 닉네임 조회
+  // 닉네임은 진짜 백엔드 서버에서 불러옵니다.
   useEffect(() => {
     const fetchNickname = async () => {
       try {
         const res = await fetch('http://localhost:3000/api/auth/me', { credentials: 'include' });
-        if (!res.ok) { setNicknameLoading(false); return; }
+        if (!res.ok) { 
+          setNicknameLoading(false); 
+          return; 
+        }
         const data = await res.json();
         setNickname(data.nickname ?? null);
       } catch {
@@ -26,6 +29,7 @@ export default function WritePost() {
         setNicknameLoading(false);
       }
     };
+    
     fetchNickname();
   }, []);
 
@@ -39,34 +43,39 @@ export default function WritePost() {
   };
 
   const handleSubmit = () => {
-    if (!nickname) return; // 버튼 자체가 비활성화되지만 안전망
+    if (!nickname) return; 
     if (!title || !content) return alert('제목과 내용을 입력해주세요!');
 
-    const savedPosts = localStorage.getItem('upTick_posts');
-    const postList = savedPosts ? JSON.parse(savedPosts) : [];
+    setIsSubmitting(true);
+    
+    setTimeout(() => {
+      const savedPosts = localStorage.getItem('upTick_posts');
+      const postList = savedPosts ? JSON.parse(savedPosts) : [];
 
-    const newPost: Post = {
-      id: Date.now(),
-      title,
-      author: nickname,
-      category,
-      content,
-      imageUrl: image,
-      date: new Date().toLocaleString('ko-KR', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', hour12: false,
-      }),
-      views: 0,
-      likes: 0,
-      comments: [],
-    };
+      const newPost = {
+        id: Date.now(),
+        title,
+        author: nickname,
+        category,
+        content,
+        imageUrl: image,
+        date: new Date().toLocaleString('ko-KR', {
+          year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', hour12: false,
+        }),
+        views: 0,
+        likes: 0,
+        comments: [],
+      };
 
-    localStorage.setItem('upTick_posts', JSON.stringify([newPost, ...postList]));
-    alert('게시글이 성공적으로 등록되었습니다.');
-    navigate('/community');
+      localStorage.setItem('upTick_posts', JSON.stringify([newPost, ...postList]));
+      alert('게시글이 성공적으로 등록되었습니다.');
+      
+      setIsSubmitting(false);
+      navigate('/community');
+    }, 600);
   };
 
-  // ── 닉네임 없을 때 안내 화면 ──────────────────────────────
   if (!nicknameLoading && nickname === null) {
     return (
       <div style={{ fontFamily: 'sans-serif', padding: '60px 20px', minHeight: '100vh', backgroundColor: '#f9fafb', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -86,7 +95,7 @@ export default function WritePost() {
             </button>
             <button
               onClick={() => navigate('/mypage')}
-              style={{ padding: '12px 24px', borderRadius: '12px', border: 'none', backgroundColor: '#22C55E', color: '#fff', fontWeight: '700', fontSize: '14px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(34,197,94,0.25)' }}
+              style={{ padding: '12px 24px', borderRadius: '12px', border: 'none', backgroundColor: '#4CAF4F', color: '#fff', fontWeight: '700', fontSize: '14px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(76,175,79,0.25)' }}
             >
               마이페이지로 이동
             </button>
@@ -99,14 +108,12 @@ export default function WritePost() {
   return (
     <div style={{ fontFamily: 'sans-serif', padding: '60px 20px', minHeight: '100vh', backgroundColor: '#f9fafb', display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: '800px', backgroundColor: '#fff', borderRadius: '24px', padding: '48px', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' }}>
-
-        {/* 상단 헤더 */}
+        
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px' }}>
           <h2 style={{ fontSize: '24px', fontWeight: 'bold', color: '#222', margin: 0 }}>새 게시글 작성</h2>
           <button onClick={() => navigate(-1)} style={{ background: 'none', border: 'none', color: '#999', cursor: 'pointer', fontSize: '16px' }}>취소</button>
         </div>
 
-        {/* 카테고리 & 작성자 (닉네임 자동매핑, 읽기 전용) */}
         <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', alignItems: 'center' }}>
           <select
             value={category}
@@ -115,7 +122,6 @@ export default function WritePost() {
           >
             <option value="질문">질문</option>
             <option value="뉴스">뉴스</option>
-            <option value="인기글">인기글</option>
           </select>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #eee', backgroundColor: '#f9fafb', color: '#374151' }}>
@@ -127,11 +133,10 @@ export default function WritePost() {
           </div>
         </div>
 
-        {/* 사진 첨부 */}
         <div style={{ marginBottom: '32px' }}>
           <label style={{
             display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px',
-            borderRadius: '12px', border: '1px solid #22C55E', color: '#22C55E',
+            borderRadius: '12px', border: '1px solid #4CAF4F', color: '#4CAF4F',
             fontSize: '14px', fontWeight: '600', cursor: 'pointer', backgroundColor: '#fff',
           }}>
             <span>📷 사진 첨부하기</span>
@@ -151,7 +156,6 @@ export default function WritePost() {
           )}
         </div>
 
-        {/* 제목 */}
         <input
           placeholder="제목을 입력하세요"
           value={title}
@@ -161,11 +165,10 @@ export default function WritePost() {
             border: 'none', borderBottom: '2px solid #f0f0f0', outline: 'none',
             marginBottom: '32px', transition: 'border-color 0.3s',
           }}
-          onFocus={e => e.currentTarget.style.borderBottomColor = '#22C55E'}
+          onFocus={e => e.currentTarget.style.borderBottomColor = '#4CAF4F'}
           onBlur={e => e.currentTarget.style.borderBottomColor = '#f0f0f0'}
         />
 
-        {/* 내용 */}
         <textarea
           placeholder="내용을 입력하세요..."
           value={content}
@@ -176,21 +179,21 @@ export default function WritePost() {
           }}
         />
 
-        {/* 등록 버튼 */}
         <button
           onClick={handleSubmit}
-          disabled={!nickname || nicknameLoading}
+          disabled={!nickname || nicknameLoading || isSubmitting}
           style={{
-            width: '100%', padding: '18px', backgroundColor: '#22C55E', color: '#fff',
+            width: '100%', padding: '18px', backgroundColor: '#4CAF4F', color: '#fff',
             border: 'none', borderRadius: '16px', fontSize: '18px', fontWeight: 'bold',
-            marginTop: '20px', cursor: 'pointer', transition: '0.2s',
-            boxShadow: '0 4px 12px rgba(34, 197, 94, 0.2)',
-            opacity: (!nickname || nicknameLoading) ? 0.5 : 1,
+            marginTop: '20px', cursor: (!nickname || nicknameLoading || isSubmitting) ? 'not-allowed' : 'pointer', 
+            transition: '0.2s',
+            boxShadow: '0 4px 12px rgba(76, 175, 79, 0.2)',
+            opacity: (!nickname || nicknameLoading || isSubmitting) ? 0.5 : 1,
           }}
-          onMouseEnter={e => { if (nickname) e.currentTarget.style.backgroundColor = '#1eb054' }}
-          onMouseLeave={e => { e.currentTarget.style.backgroundColor = '#22C55E' }}
+          onMouseEnter={e => { if (nickname && !isSubmitting) e.currentTarget.style.backgroundColor = '#3e8e41' }}
+          onMouseLeave={e => { if (!isSubmitting) e.currentTarget.style.backgroundColor = '#4CAF4F' }}
         >
-          게시글 등록하기
+          {isSubmitting ? '등록 중...' : '게시글 등록하기'}
         </button>
       </div>
     </div>
