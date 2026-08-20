@@ -10,6 +10,7 @@ import {
   DEVICE_COOKIE_NAME,
 } from '../../services/auth/trustedDeviceService'
 import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
+import { issueSessionSecret, revokeSessionSecret } from '../../services/auth/hmacService'
 import Wallet from '../../models/user/Wallet'
 import User from '../../models/user/User'
 import { nextTick } from 'node:process'
@@ -187,7 +188,7 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
 // 2단계: 지갑 서명 검증 → JWT 발급
 export const loginStep2 = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { userId, walletAddress, signature, rememberDevice, skipSignature } = req.body // ↓ rememberDevice, skipSignature 추가
+    const { userId, walletAddress, signature, rememberDevice } = req.body
 
     const ip =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
@@ -196,13 +197,29 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     const userAgent = req.headers['user-agent'] || 'unknown'
 
+    // 지갑 서명 생략 여부는 클라이언트 요청값(skipSignature)을 신뢰하지 않고 서버가 직접 재검증한다.
+    // 요청 바디의 플래그를 그대로 쓰면 비밀번호만 아는 공격자가 서명 단계를 우회할 수 있다.
+    const rawDeviceToken = req.cookies?.[DEVICE_COOKIE_NAME]
+    const isTrustedDevice = rawDeviceToken
+      ? await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip)
+      : false
+
+    if (!isTrustedDevice && !signature) {
+      res.locals.loginSuccess = false
+      res.locals.loginEmail = req.body.email ?? ''
+      res.locals.responseData = { message: '지갑 서명이 필요합니다' }
+      res.locals.responseStatus = 400
+      res.locals.isStep2 = true
+      return next()
+    }
+
     const { user, accessToken, refreshToken } = await authService.loginStep2(
       userId,
       walletAddress,
       signature,
       ip,
       userAgent,
-      skipSignature,
+      isTrustedDevice,
     )
 
     res.cookie('accessToken', accessToken, {
@@ -242,9 +259,13 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
     res.locals.loginEmail = user.email
     res.locals.loginUserId = user.id
 
+    // HMAC 요청서명용 세션 서명키 발급 — 클라이언트가 거래 요청 서명에 사용
+    const signingSecret = issueSessionSecret(user.id)
+
     // return res.status(200).json({
     res.locals.responseData = {
       message: '로그인 성공',
+      signingSecret,
       user: {
         id: user.id,
         email: user.email,
@@ -290,6 +311,7 @@ export const withdraw = async (req: Request, res: Response) => {
     const userId = (req as any).user.id
     await authService.withdraw(userId)
     await revokeAllTrustedDevices(userId)
+    revokeSessionSecret(userId)
     res.clearCookie('accessToken')
     res.clearCookie('refreshToken')
     res.clearCookie('isLoggedIn')
@@ -460,7 +482,11 @@ export const changePassword = async (req: Request, res: Response) => {
     if (!ok) return res.status(400).json({ message: '현재 비밀번호가 올바르지 않습니다' })
 
     const newHash = await bcrypt.hash(newPassword, 12)
-    await User.update({ password_hash: newHash }, { where: { id: userId } })
+    // 변경 시각을 함께 남긴다 — M-2(계정 정보 변경 직후 고액 거래) 판정의 기준점이다.
+    await User.update(
+      { password_hash: newHash, password_changed_at: new Date() },
+      { where: { id: userId } },
+    )
     return res.status(200).json({ message: '비밀번호가 변경되었습니다' })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })

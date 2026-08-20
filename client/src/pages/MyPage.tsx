@@ -4,12 +4,15 @@ import { useTradeModeStore } from '../store/tradeModeStore'
 import { useProfileStore } from '../store/profileStore'
 import VirtualPortfolio from '../components/trade/VirtualPortfolio'
 
+import { API_BASE } from '../utils/api'
+import { signedFetch } from '../utils/tradeSigning'
+
 // ─── 실거래 포트폴리오 섹션 ─────────────────────────────────────
 function RealPortfolioSection({ onRegister, refreshKey }: { onRegister: () => void; refreshKey: number }) {
   const [status, setStatus] = useState<'loading' | 'registered' | 'not_registered'>('loading')
 
   useEffect(() => {
-    fetch('http://localhost:3000/api/trade/real/account', { credentials: 'include' })
+    fetch(`${API_BASE}/api/trade/real/account`, { credentials: 'include' })
       .then(r => r.json())
       .then(data => setStatus(data.isRegistered ? 'registered' : 'not_registered'))
       .catch(() => setStatus('not_registered'))
@@ -50,11 +53,9 @@ function RealPortfolioSection({ onRegister, refreshKey }: { onRegister: () => vo
 // ─── 모의투자 계좌 섹션 ──────────────────────────────────────────
 function VirtualAccountSection() {
   const [hasAccount, setHasAccount] = useState<boolean | null>(null)
-  const [opening, setOpening] = useState(false)
-  const [msg, setMsg] = useState('')
 
   useEffect(() => {
-    fetch('http://localhost:3000/api/trade/virtual/portfolio', { credentials: 'include' })
+    fetch(`${API_BASE}/api/trade/virtual/portfolio`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => setHasAccount(!!data.balance || data.balance === 0))
       .catch(() => setHasAccount(false))
@@ -70,39 +71,16 @@ function VirtualAccountSection() {
     )
   }
 
-  const handleOpen = async () => {
-    setOpening(true)
-    setMsg('')
-    try {
-      const res = await fetch('http://localhost:3000/api/trade/virtual/account/open', {
-        method: 'POST',
-        credentials: 'include',
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.message)
-      setHasAccount(true)
-      setMsg('계좌가 개설되었습니다!')
-    } catch (e: any) {
-      setMsg(e.message)
-    } finally {
-      setOpening(false)
-    }
-  }
-
+  // 개설은 아래 모의투자 섹션의 PIN 설정 흐름에서만 처리한다.
+  // 여기에 있던 개설 버튼은 PIN 없이 요청을 보내 서버가 항상 400 으로 거절했고,
+  // PIN 설정 단계를 건너뛰어 거래 인증 수단이 없는 계좌를 만들려 했다.
   return (
-    <div className="space-y-3">
-      <div className="p-5 bg-gray-50 border border-gray-200 rounded-2xl text-center">
-        <p className="text-sm text-gray-600 mb-1">아직 모의투자 계좌가 없습니다.</p>
-        <p className="text-xs text-gray-400">계좌 개설 시 초기 자금 1,000만원이 지급됩니다.</p>
-      </div>
-      {msg && <p className={`text-sm font-semibold text-center ${msg.includes('개설') ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg}</p>}
-      <button
-        onClick={handleOpen}
-        disabled={opening}
-        className="w-full py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
-      >
-        {opening ? '개설 중...' : '모의투자 계좌 개설'}
-      </button>
+    <div className="p-5 bg-gray-50 border border-gray-200 rounded-2xl text-center space-y-1">
+      <p className="text-sm text-gray-600">아직 모의투자 계좌가 없습니다.</p>
+      <p className="text-xs text-gray-400">계좌 개설 시 초기 자금 1,000만원이 지급됩니다.</p>
+      <p className="text-xs text-gray-500 pt-2">
+        아래 <span className="font-semibold text-[#22C55E]">모의투자</span> 섹션에서 거래용 PIN을 설정하면 계좌가 개설됩니다.
+      </p>
     </div>
   )
 }
@@ -120,7 +98,7 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/trade/real/account', { credentials: 'include' })
+      const res = await fetch(`${API_BASE}/api/trade/real/account`, { credentials: 'include' })
       const data = await res.json()
       if (data.isRegistered) {
         setStatus('registered')
@@ -144,10 +122,9 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
     setLoading(true)
     setMsg(null)
     try {
-      const res = await fetch('http://localhost:3000/api/trade/real/account', {
+      const res = await signedFetch(`${API_BASE}/api/trade/real/account`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ appKey, appSecret, cano, acntPrdtCd, pin }),
       })
       const data = await res.json()
@@ -169,10 +146,9 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
     setLoading(true)
     setMsg(null)
     try {
-      const res = await fetch('http://localhost:3000/api/trade/real/account', {
+      const res = await signedFetch(`${API_BASE}/api/trade/real/account`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pin: removePin }),
       })
       const data = await res.json()
@@ -355,7 +331,7 @@ interface UserInfo {
   email_changed_at: string | null
 }
 
-const API = 'http://localhost:3000/api/auth'
+const API = `${API_BASE}/api/auth`
 
 export default function MyPage() {
   const navigate = useNavigate()
@@ -435,7 +411,7 @@ export default function MyPage() {
     } catch {}
 
     try {
-      const res = await fetch('http://localhost:3000/api/user/profile-image', { credentials: 'include' })
+      const res = await fetch(`${API_BASE}/api/user/profile-image`, { credentials: 'include' })
       if (!res.ok) return
       const data = await res.json()
       setProfileImage(data.imageUrl ?? null)
@@ -488,7 +464,7 @@ export default function MyPage() {
       const imageBase64 = ev.target?.result as string
       setProfileImage(imageBase64) // 업로드 전 미리보기
       try {
-        const res = await fetch('http://localhost:3000/api/user/profile-image', {
+        const res = await fetch(`${API_BASE}/api/user/profile-image`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -509,7 +485,7 @@ export default function MyPage() {
     setImageError('')
     if (fileInputRef.current) fileInputRef.current.value = ''
     try {
-      await fetch('http://localhost:3000/api/user/profile-image', {
+      await fetch(`${API_BASE}/api/user/profile-image`, {
         method: 'DELETE',
         credentials: 'include',
       })

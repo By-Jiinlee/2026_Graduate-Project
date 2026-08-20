@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { setSigningSecret } from '../utils/tradeSigning'
+
+import { API_BASE } from '../utils/api'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -19,7 +22,7 @@ export default function Login() {
   const handleLoginStep1 = async () => {
   try {
     setError('')
-    const res = await fetch('http://localhost:3000/api/auth/login/step1', {
+    const res = await fetch(`${API_BASE}/api/auth/login/step1`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -32,7 +35,7 @@ export default function Login() {
 
     if (data.isTrustedDevice) {
       // 신뢰 기기 → MetaMask 없이 자동 step2
-      const res2 = await fetch('http://localhost:3000/api/auth/login/step2', {
+      const res2 = await fetch(`${API_BASE}/api/auth/login/step2`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -40,6 +43,7 @@ export default function Login() {
       })
       const data2 = await res2.json()
       if (!res2.ok) throw new Error(data2.message)
+      if (data2.signingSecret) setSigningSecret(data2.signingSecret)
       localStorage.setItem('loginTime', Date.now().toString())
       localStorage.setItem('upTick_user', JSON.stringify(data2.user))
       window.location.href = data2.user?.is_survey_completed ? '/' : '/survey'
@@ -83,7 +87,7 @@ export default function Login() {
         params: [innerHash, address],
       })
 
-      const res = await fetch('http://localhost:3000/api/auth/login/step2', {
+      const res = await fetch(`${API_BASE}/api/auth/login/step2`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -95,6 +99,7 @@ export default function Login() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
+      if (data.signingSecret) setSigningSecret(data.signingSecret)
       localStorage.setItem('loginTime', Date.now().toString())
       localStorage.setItem('upTick_user', JSON.stringify(data.user))
       window.location.href = data.user?.is_survey_completed ? '/' : '/survey'

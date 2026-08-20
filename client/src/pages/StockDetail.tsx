@@ -7,6 +7,8 @@ import axios from 'axios'
 import OrderPanel from '../components/trade/OrderPanel'
 import { formatStockName } from '../utils/formatStockName'
 
+import { API_BASE, SOCKET_URL } from '../utils/api'
+
 interface StockInfo {
     id: number
     name: string
@@ -104,7 +106,7 @@ export default function StockDetail() {
         if (!stockId) return
         const load = async () => {
             try {
-                const res = await axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/detail`)
+                const res = await axios.get(`${API_BASE}/api/market/stock-prices/${stockId}/detail`)
                 if (!res.data.info) { setError(true); return }
                 setInfo(res.data.info)
                 setLivePrice({
@@ -128,7 +130,7 @@ export default function StockDetail() {
     useEffect(() => {
         if (!needsMinute || minuteLoaded || !stockId) return
         setMinuteLoading(true)
-        axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/minute?interval=1`)
+        axios.get(`${API_BASE}/api/market/stock-prices/${stockId}/minute?interval=1`)
             .then(res => { setMinuteCandles(res.data.candles ?? []); setMinuteLoaded(true) })
             .catch(() => setMinuteLoaded(true))
             .finally(() => setMinuteLoading(false))
@@ -183,7 +185,7 @@ export default function StockDetail() {
 
         setHistLoading(true)
         setHistData([])
-        axios.get(`http://localhost:3000/api/market/stock-prices/${stockId}/history`, {
+        axios.get(`${API_BASE}/api/market/stock-prices/${stockId}/history`, {
             params: { period_code: periodCode, from, to: kstDate() },
         })
             .then(res => {
@@ -382,7 +384,7 @@ export default function StockDetail() {
     // 실시간 소켓
     useEffect(() => {
         if (!info) return
-        const socket = io('http://localhost:3000')
+        const socket = io(SOCKET_URL)
         socketRef.current = socket
 
         // 연결/재연결 시 구독 재등록

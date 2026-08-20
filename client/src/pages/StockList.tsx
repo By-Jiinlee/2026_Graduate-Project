@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { formatStockName } from '../utils/formatStockName';
 
+import { API_BASE, SOCKET_URL } from '../utils/api'
+
 interface StockData {
   id: number;
   name: string;
@@ -34,7 +36,7 @@ const StockList: React.FC = () => {
 
   const fetchStocks = async () => {
     try {
-      const response = await axios.get('http://localhost:3000/api/market/stock-prices/all');
+      const response = await axios.get(`${API_BASE}/api/market/stock-prices/all`);
       if (response.data.success) {
         setStocks(response.data.data);
       }
@@ -50,7 +52,7 @@ const StockList: React.FC = () => {
     
     // 관심종목 불러오기 (로그인 시 서버, 비로그인 시 localStorage)
     if (loggedIn) {
-      fetch('http://localhost:3000/api/user/favorites', { credentials: 'include' })
+      fetch(`${API_BASE}/api/user/favorites`, { credentials: 'include' })
         .then(r => r.json())
         .then(data => { if (Array.isArray(data.stock_ids)) setFavorites(data.stock_ids) })
         .catch(() => {
@@ -63,7 +65,7 @@ const StockList: React.FC = () => {
     }
 
     // 실시간 시세 구독
-    const socket = io('http://localhost:3000');
+    const socket = io(SOCKET_URL);
     socket.on('stock:price', (data: {
       code: string; price: number; change: number; changeRate: number; volume: number;
     }) => {
@@ -85,14 +87,14 @@ const StockList: React.FC = () => {
 
     if (loggedIn) {
       if (isAdding) {
-        fetch('http://localhost:3000/api/user/favorites', {
+        fetch(`${API_BASE}/api/user/favorites`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ stock_id: id }),
         }).catch(() => {})
       } else {
-        fetch(`http://localhost:3000/api/user/favorites/${id}`, {
+        fetch(`${API_BASE}/api/user/favorites/${id}`, {
           method: 'DELETE',
           credentials: 'include',
         }).catch(() => {})
@@ -160,7 +162,7 @@ const StockList: React.FC = () => {
     setDraggedIdx(null)
 
     if (loggedIn) {
-      fetch('http://localhost:3000/api/user/favorites/reorder', {
+      fetch(`${API_BASE}/api/user/favorites/reorder`, {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

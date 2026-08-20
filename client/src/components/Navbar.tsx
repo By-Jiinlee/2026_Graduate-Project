@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react'
 import { useTradeModeStore } from '../store/tradeModeStore'
 import { useProfileStore } from '../store/profileStore'
 
+import { API_BASE } from '../utils/api'
+
 const checkLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
 const getSessionRemaining = () => {
@@ -48,7 +50,7 @@ export default function Navbar() {
   }, [loggedIn])
 
   const handleLogout = async () => {
-    await fetch('http://localhost:3000/api/auth/logout', {
+    await fetch(`${API_BASE}/api/auth/logout`, {
       method: 'POST',
       credentials: 'include',
     })
@@ -63,7 +65,7 @@ export default function Navbar() {
 
   const handleExtendSession = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/auth/refresh', {
+      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })

@@ -10,6 +10,8 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 
+import { SOCKET_URL } from '../utils/api'
+
 // ─── 타입 ─────────────────────────────────────────────────────
 
 interface IndexData {
@@ -242,7 +244,7 @@ export default function LandingPage(): React.ReactElement {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    const socket: Socket = io('http://localhost:3000', {
+    const socket: Socket = io(SOCKET_URL, {
       transports: ['websocket'],
     })
 

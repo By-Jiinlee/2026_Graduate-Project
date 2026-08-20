@@ -4,33 +4,31 @@ import RealAccount from '../../models/trade/RealAccount'
 import RealOrder from '../../models/trade/RealOrder'
 import { getUserKisToken, clearUserToken } from '../market/KisUserAuth'
 import { verifyPin } from './virtualTradeService'
+import { evaluateTradeRequest } from '../auth/tradeAnomalyService'
+import { decryptField, encryptField } from '../auth/fieldCrypto'
 
 const KIS_BASE_URL = 'https://openapi.koreainvestment.com:9443'
 
 // ─── 암호화 ───────────────────────────────────────────────────────
-// .env에 KIS_ENCRYPT_KEY=<64자리 hex 문자열> 추가 필요
-// ex) node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+// 실제 암복호는 fieldCrypto(AES-256-GCM)가 담당한다. 여기서는 "어느 행의 어느 컬럼"
+// 인지를 AAD 로 묶어 넘기는 얇은 래퍼만 둔다 — 암호문을 다른 컬럼이나 다른 사용자
+// 행으로 옮겨 붙이는 재배치 공격을 복호 단계에서 실패시키기 위함이다.
+// 레거시(CBC) 암호문은 fieldCrypto 가 하위호환으로 읽는다.
 
-const getEncryptKey = () => {
-  const key = process.env.KIS_ENCRYPT_KEY
-  if (!key || key.length < 64) throw new Error('KIS_ENCRYPT_KEY가 설정되지 않았습니다 (.env 확인)')
-  return Buffer.from(key.slice(0, 64), 'hex')
-}
+export const REAL_ACCOUNT_TABLE = 'real_accounts'
+export type RealAccountSecret = 'app_key' | 'app_secret' | 'cano'
 
-const encrypt = (text: string): string => {
-  const iv = crypto.randomBytes(16)
-  const cipher = crypto.createCipheriv('aes-256-cbc', getEncryptKey(), iv)
-  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()])
-  return iv.toString('hex') + ':' + encrypted.toString('hex')
-}
+const ctxOf = (userId: number, column: RealAccountSecret) => ({
+  table: REAL_ACCOUNT_TABLE,
+  column,
+  ownerId: userId,
+})
 
-const decrypt = (text: string): string => {
-  const [ivHex, encHex] = text.split(':')
-  const iv = Buffer.from(ivHex, 'hex')
-  const enc = Buffer.from(encHex, 'hex')
-  const decipher = crypto.createDecipheriv('aes-256-cbc', getEncryptKey(), iv)
-  return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8')
-}
+const encrypt = (userId: number, column: RealAccountSecret, text: string): string =>
+  encryptField(text, ctxOf(userId, column))
+
+const decrypt = (userId: number, column: RealAccountSecret, text: string): string =>
+  decryptField(text, ctxOf(userId, column))
 
 // ─── KIS API 헬퍼 ────────────────────────────────────────────────
 
@@ -68,18 +66,18 @@ export const registerAccount = async (
   const existing = await RealAccount.findOne({ where: { user_id: userId } })
   if (existing) {
     await existing.update({
-      app_key: encrypt(appKey),
-      app_secret: encrypt(appSecret),
-      cano: encrypt(cano),
+      app_key: encrypt(userId, 'app_key', appKey),
+      app_secret: encrypt(userId, 'app_secret', appSecret),
+      cano: encrypt(userId, 'cano', cano),
       acnt_prdt_cd: acntPrdtCd,
       is_active: true,
     })
   } else {
     await RealAccount.create({
       user_id: userId,
-      app_key: encrypt(appKey),
-      app_secret: encrypt(appSecret),
-      cano: encrypt(cano),
+      app_key: encrypt(userId, 'app_key', appKey),
+      app_secret: encrypt(userId, 'app_secret', appSecret),
+      cano: encrypt(userId, 'cano', cano),
       acnt_prdt_cd: acntPrdtCd,
       is_active: true,
     })
@@ -94,12 +92,12 @@ export const getAccountStatus = async (
   const account = await RealAccount.findOne({ where: { user_id: userId, is_active: true } })
   if (!account) return { isRegistered: false }
 
-  const cano = decrypt(account.cano)
+  const cano = decrypt(userId, 'cano', account.cano)
   const maskedCano = cano.slice(0, 2) + '******'
 
   try {
-    const appKey = decrypt(account.app_key)
-    const appSecret = decrypt(account.app_secret)
+    const appKey = decrypt(userId, 'app_key', account.app_key)
+    const appSecret = decrypt(userId, 'app_secret', account.app_secret)
     const token = await getUserKisToken(userId, appKey, appSecret)
     const res = await axios.get(`${KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance`, {
       params: {
@@ -140,9 +138,9 @@ export const getBalance = async (userId: number) => {
   const account = await RealAccount.findOne({ where: { user_id: userId, is_active: true } })
   if (!account) throw new Error('실거래 계좌가 등록되지 않았습니다')
 
-  const appKey = decrypt(account.app_key)
-  const appSecret = decrypt(account.app_secret)
-  const cano = decrypt(account.cano)
+  const appKey = decrypt(userId, 'app_key', account.app_key)
+  const appSecret = decrypt(userId, 'app_secret', account.app_secret)
+  const cano = decrypt(userId, 'cano', account.cano)
   const token = await getUserKisToken(userId, appKey, appSecret)
 
   const res = await axios.get(`${KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance`, {
@@ -202,14 +200,36 @@ interface OrderParams {
 }
 
 const placeKisOrder = async (params: OrderParams) => {
-  await verifyPin(params.userId, params.pin)
+  // PIN 검증 결과를 기록해야 "반복 실패 후 성공"(M-5)을 판정할 수 있으므로 문맥을 넘긴다.
+  await verifyPin(params.userId, params.pin, {
+    ip: params.ipAddress,
+    userAgent: params.userAgent,
+  })
+
+  // M-1 거래 이상탐지 — PIN 확인 직후, 외부(KIS) 주문 전송 전에 판정한다.
+  // 실계좌는 지갑 서명 재인증 경로가 없어(stepUpAvailable=false) 통계 이탈은
+  // 기록·경보로 남기고, 정상 클라이언트가 만들 수 없는 무결성 위반만 중단시킨다.
+  // 평가액은 KIS 잔고 조회 비용 때문에 넘기지 않는다 → 비율 규칙 대신 개인 베이스라인만 사용.
+  const assessment = await evaluateTradeRequest({
+    userId: params.userId,
+    ip: params.ipAddress,
+    userAgent: params.userAgent,
+    market: 'real',
+    side: params.side,
+    stockCode: params.stockCode,
+    quantity: params.quantity,
+    price: params.price,
+    hasSignature: false,
+    stepUpAvailable: false,
+  })
+  if (assessment.verdict === 'BLOCK') throw new Error(assessment.userMessage)
 
   const account = await RealAccount.findOne({ where: { user_id: params.userId, is_active: true } })
   if (!account) throw new Error('실거래 계좌가 등록되지 않았습니다')
 
-  const appKey = decrypt(account.app_key)
-  const appSecret = decrypt(account.app_secret)
-  const cano = decrypt(account.cano)
+  const appKey = decrypt(params.userId, 'app_key', account.app_key)
+  const appSecret = decrypt(params.userId, 'app_secret', account.app_secret)
+  const cano = decrypt(params.userId, 'cano', account.cano)
   const token = await getUserKisToken(params.userId, appKey, appSecret)
 
   // 매수: TTTC0802U, 매도: TTTC0801U

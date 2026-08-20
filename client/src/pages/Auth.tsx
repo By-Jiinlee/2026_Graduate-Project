@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { API_BASE } from '../utils/api'
 import { Link, useNavigate } from 'react-router-dom'; // 페이지 이동을 위해 추가
 
 export default function Auth() {
@@ -13,7 +14,7 @@ export default function Auth() {
     setErrorMessage(''); // 새로운 요청 시 에러 초기화
 
     try {
-      const response = await fetch('http://localhost:3000/api/auth/login', {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),

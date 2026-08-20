@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
+import { API_BASE } from '../utils/api'
+
 export default function Register() {
   const [form, setForm] = useState({
     name: '',
@@ -68,7 +70,7 @@ export default function Register() {
   const sendEmailCode = async () => {
     try {
       setError('')
-      const res = await fetch('http://localhost:3000/api/auth/email/send', {
+      const res = await fetch(`${API_BASE}/api/auth/email/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: form.email }),
@@ -84,7 +86,7 @@ export default function Register() {
   const verifyEmailCode = async () => {
     try {
       setError('')
-      const res = await fetch('http://localhost:3000/api/auth/email/verify', {
+      const res = await fetch(`${API_BASE}/api/auth/email/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: form.email, code: form.emailCode }),
@@ -100,7 +102,7 @@ export default function Register() {
   const sendSmsCode = async () => {
     try {
       setError('')
-      const res = await fetch('http://localhost:3000/api/auth/sms/send', {
+      const res = await fetch(`${API_BASE}/api/auth/sms/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: form.phone }),
@@ -116,7 +118,7 @@ export default function Register() {
   const verifySmsCode = async () => {
     try {
       setError('')
-      const res = await fetch('http://localhost:3000/api/auth/sms/verify', {
+      const res = await fetch(`${API_BASE}/api/auth/sms/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: form.phone, code: form.smsCode }),
@@ -148,7 +150,7 @@ export default function Register() {
       const address = accounts[0]
 
       // 지갑 주소 사전 체크 (DB + 온체인)
-      const checkRes = await fetch(`http://localhost:3000/api/auth/wallet/check?address=${address}`)
+      const checkRes = await fetch(`${API_BASE}/api/auth/wallet/check?address=${address}`)
       const checkData = await checkRes.json()
       if (!checkData.available) {
         setWalletConflict(true)
@@ -188,7 +190,7 @@ export default function Register() {
   const handleRegister = async () => {
     try {
       setError('')
-      const res = await fetch('http://localhost:3000/api/auth/register', {
+      const res = await fetch(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

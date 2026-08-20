@@ -6,6 +6,7 @@ import Wallet from '../../models/user/Wallet'
 import EmailVerification from '../../models/auth/EmailVerification'
 import SmsVerification from '../../models/auth/SmsVerification'
 import LoginRecord from '../../models/auth/LoginRecord'
+import { getLocationFromIp } from '../../utils/getLocationFromIp'
 import {
   isWalletRegistered,
   registerWalletFor,
@@ -285,15 +286,26 @@ export const register = async (
 
 // ─── 로그인 ───────────────────────────────────────────────────
 
+// 존재하지 않는 계정에도 동일한 비용의 비교를 수행하기 위한 더미 해시.
+// 실제 저장 해시와 같은 cost(12)로 만들어 두어야 응답 시간 차이가 생기지 않는다.
+// (평문은 어떤 입력과도 일치하지 않는 무작위 값이다)
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 12)
+
 // 1단계: 이메일 + 비밀번호 검증 → nonce 반환
 export const loginStep1 = async (email: string, password: string) => {
   const user = await User.findOne({ where: { email } })
-  if (!user) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
+
+  // 계정 열거(enumeration) 억제
+  //  1) 잠금·탈퇴 여부를 비밀번호 검증 "이후"에 확인한다. 이전에 확인하면 비밀번호를
+  //     모르는 공격자도 응답 문구만으로 그 이메일의 가입 여부를 알 수 있다.
+  //  2) 계정이 없어도 더미 해시로 비교를 수행한다. 비교를 건너뛰면 응답 시간이 짧아져
+  //     문구가 같아도 타이밍으로 존재 여부가 드러난다.
+  const hash = user?.password_hash ?? DUMMY_PASSWORD_HASH
+  const isMatch = await bcrypt.compare(password, hash)
+  if (!user || !isMatch) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
+
   if (user.is_locked) throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
   if (user.status === 'withdrawn') throw new Error('탈퇴한 계정입니다')
-
-  const isMatch = await bcrypt.compare(password, user.password_hash)
-  if (!isMatch) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
 
   const wallet = await Wallet.findOne({ where: { user_id: user.id, is_primary: true } })
   if (!wallet) throw new Error('지갑이 등록되지 않은 계정입니다')
@@ -349,12 +361,6 @@ export const loginStep2 = async (
 
 // ─── 로그인 기록 ──────────────────────────────────────────────
 
-interface GeoResponse {
-  country?: string
-  regionName?: string
-  city?: string
-}
-
 const saveLoginRecord = async (
   userId: number,
   walletAddress: string,
@@ -362,18 +368,19 @@ const saveLoginRecord = async (
   userAgent: string,
 ) => {
   try {
-    const geoRes = await fetch(
-      `http://ip-api.com/json/${ip}?fields=country,regionName,city`,
-    )
-    const geo = (await geoRes.json()) as GeoResponse
+    // 공통 유틸을 쓴다 — 여기서 ip-api 를 직접 호출하던 사본이 있었고, 그 사본은
+    // 좌표(lat/lon)를 요청하지 않아 Impossible Travel(M-4) 이 쓸 데이터가 남지 않았다.
+    const geo = await getLocationFromIp(ip)
 
     await LoginRecord.create({
       user_id: userId,
       wallet_address: walletAddress,
       ip_address: ip,
       country: geo.country ?? undefined,
-      region: geo.regionName ?? undefined,
+      region: geo.region ?? undefined,
       city: geo.city ?? undefined,
+      latitude: geo.lat ?? null,
+      longitude: geo.lon ?? null,
       user_agent: userAgent,
       logged_at: new Date(),
     })

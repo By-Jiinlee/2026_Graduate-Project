@@ -13,7 +13,11 @@ export const registerAccount = async (req: Request, res: Response) => {
     if (!appKey || !appSecret || !cano || !acntPrdtCd || !pin) {
       return res.status(400).json({ message: '모든 항목을 입력해주세요' })
     }
-    await verifyPin(userId, pin)
+    await verifyPin(userId, pin, {
+      ip: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      email: (req as any).user?.email,
+    })
     await svc.registerAccount(userId, appKey, appSecret, cano, acntPrdtCd)
     res.json({ message: '실거래 계좌가 등록되었습니다' })
   } catch (err: any) {
@@ -40,7 +44,11 @@ export const removeAccount = async (req: Request, res: Response) => {
     const userId = (req as any).user.id
     const { pin } = req.body
     if (!pin) return res.status(400).json({ message: 'PIN을 입력해주세요' })
-    await verifyPin(userId, pin)
+    await verifyPin(userId, pin, {
+      ip: getClientIp(req),
+      userAgent: req.headers['user-agent'],
+      email: (req as any).user?.email,
+    })
     await svc.removeAccount(userId)
     res.json({ message: '실거래 계좌가 해제되었습니다' })
   } catch (err: any) {

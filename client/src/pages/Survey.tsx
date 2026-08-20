@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { questions, investmentTypes } from '../data/surveyData';
 
+import { API_BASE } from '../utils/api'
+
 export default function Survey() {
   const [step, setStep] = useState(0);
   const [totalScore, setTotalScore] = useState(0);
@@ -31,7 +33,7 @@ export default function Survey() {
 
     // 서버에 저장
     try {
-      await fetch('http://localhost:3000/api/survey/complete', {
+      await fetch(`${API_BASE}/api/survey/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

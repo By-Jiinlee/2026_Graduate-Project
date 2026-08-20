@@ -5,6 +5,8 @@ import { io, Socket } from 'socket.io-client'
 import PinPad from './PinPad'
 import { formatStockName } from '../../utils/formatStockName'
 
+import { API_BASE, SOCKET_URL } from '../../utils/api'
+
 interface Holding {
   stock_id: number
   code: string
@@ -92,7 +94,7 @@ export default function VirtualPortfolio() {
 
   const fetchPortfolio = useCallback(async () => {
     try {
-      const res = await axios.get('http://localhost:3000/api/trade/virtual/portfolio', { withCredentials: true })
+      const res = await axios.get(`${API_BASE}/api/trade/virtual/portfolio`, { withCredentials: true })
       setPortfolio(res.data)
       setNoAccount(false)
     } catch (err: any) {
@@ -105,7 +107,7 @@ export default function VirtualPortfolio() {
   const fetchOrders = useCallback(async () => {
     setOrdersLoading(true)
     try {
-      const res = await axios.get('http://localhost:3000/api/trade/virtual/orders', { withCredentials: true })
+      const res = await axios.get(`${API_BASE}/api/trade/virtual/orders`, { withCredentials: true })
       setOrders(res.data)
     } catch { /* silent */ }
     finally { setOrdersLoading(false) }
@@ -114,7 +116,7 @@ export default function VirtualPortfolio() {
   const fetchPendingOrders = useCallback(async () => {
     setPendingLoading(true)
     try {
-      const res = await axios.get('http://localhost:3000/api/trade/virtual/orders/pending', { withCredentials: true })
+      const res = await axios.get(`${API_BASE}/api/trade/virtual/orders/pending`, { withCredentials: true })
       setPendingOrders(res.data)
     } catch { /* silent */ }
     finally { setPendingLoading(false) }
@@ -122,7 +124,7 @@ export default function VirtualPortfolio() {
 
   useEffect(() => {
     fetchPortfolio()
-    axios.get('http://localhost:3000/api/auth/me', { withCredentials: true })
+    axios.get(`${API_BASE}/api/auth/me`, { withCredentials: true })
       .then(r => setIsPhoneVerified(!!r.data.is_phone_verified))
       .catch(() => setIsPhoneVerified(false))
   }, [fetchPortfolio])
@@ -131,7 +133,7 @@ export default function VirtualPortfolio() {
   useEffect(() => {
     if (!portfolio || portfolio.holdings.length === 0) return
 
-    const socket = io('http://localhost:3000')
+    const socket = io(SOCKET_URL)
     socketRef.current = socket
     const holdingCodes = new Set(portfolio.holdings.map(h => h.code))
 
@@ -199,7 +201,7 @@ export default function VirtualPortfolio() {
       }
       setWorking(true)
       try {
-        await axios.post('http://localhost:3000/api/trade/virtual/pin', { pin }, { withCredentials: true })
+        await axios.post(`${API_BASE}/api/trade/virtual/pin`, { pin }, { withCredentials: true })
         setPinFlow('open')
         setPinPadKey(k => k + 1)
         setPinError('')
@@ -214,7 +216,7 @@ export default function VirtualPortfolio() {
     } else if (pinFlow === 'open') {
       setWorking(true)
       try {
-        await axios.post('http://localhost:3000/api/trade/virtual/account/open', { pin }, { withCredentials: true })
+        await axios.post(`${API_BASE}/api/trade/virtual/account/open`, { pin }, { withCredentials: true })
         setPinFlow(null)
         setPinError('')
         setLoading(true)
@@ -263,7 +265,7 @@ export default function VirtualPortfolio() {
       }
       try {
         await axios.post(
-          'http://localhost:3000/api/trade/virtual/pin/change',
+          `${API_BASE}/api/trade/virtual/pin/change`,
           { oldPin, newPin: pin },
           { withCredentials: true }
         )
@@ -292,7 +294,7 @@ export default function VirtualPortfolio() {
     setResetWorking(true)
     try {
       await axios.post(
-        'http://localhost:3000/api/trade/virtual/account/reset',
+        `${API_BASE}/api/trade/virtual/account/reset`,
         { pin },
         { withCredentials: true }
       )
@@ -313,7 +315,7 @@ export default function VirtualPortfolio() {
   const handleCancelOrder = async (orderId: number) => {
     try {
       await axios.delete(
-        `http://localhost:3000/api/trade/virtual/orders/${orderId}`,
+        `${API_BASE}/api/trade/virtual/orders/${orderId}`,
         { withCredentials: true }
       )
       fetchPendingOrders()

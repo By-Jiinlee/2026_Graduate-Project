@@ -12,6 +12,8 @@ export default defineConfig({
     },
   },
   server: {
+    // 발표·시연 시 휴대폰이나 다른 PC에서 LAN IP로 접속할 수 있도록 모든 인터페이스에 바인딩한다.
+    host: true,
     proxy: {
       '/api': {
         target: 'http://localhost:3000',

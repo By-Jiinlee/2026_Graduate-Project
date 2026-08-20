@@ -4,7 +4,9 @@ import {
   LineChart, Line, Legend,
 } from 'recharts'
 
-const API = 'http://localhost:3000/api/admin/security'
+import { API_BASE } from '../utils/api'
+
+const API = `${API_BASE}/api/admin/security`
 
 const TYPE_META: Record<string, { label: string; color: string }> = {
   BRUTE_FORCE:        { label: '브루트포스',    color: '#e53935' },
@@ -13,6 +15,16 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   ABNORMAL_COUNTRY:   { label: '비정상 국가',  color: '#1e88e5' },
   HONEYPOT:           { label: '허니팟',       color: '#b71c1c' },
   ABUSE_IP:           { label: '악성 IP',      color: '#d84315' },
+  REQUEST_TAMPERING:  { label: '요청 위·변조',  color: '#00897b' },
+  REPLAY_ATTACK:      { label: '요청 재전송',   color: '#5e35b1' },
+  ABNORMAL_TRADE_AMOUNT: { label: '거래 이상',   color: '#c62828' },
+  ADVERSARIAL_INPUT:  { label: '적대적 입력',   color: '#00acc1' },
+  MODEL_EXTRACTION:   { label: '모델 추출(구)', color: '#6d4c41' },
+  INFERENCE_ABUSE:    { label: 'AI 조회 남용',  color: '#6d4c41' },
+  IMPOSSIBLE_TRAVEL:  { label: '불가능한 이동', color: '#0277bd' },
+  CREDENTIAL_STUFFING:{ label: '반복실패 후 성공', color: '#ad1457' },
+  POST_CHANGE_TRADE:  { label: '계정변경 직후 거래', color: '#ef6c00' },
+  DORMANT_ACCOUNT_ACTIVITY: { label: '휴면계정 활동', color: '#4527a0' },
 }
 
 const ACTION_META: Record<string, { label: string; color: string }> = {
@@ -21,13 +33,23 @@ const ACTION_META: Record<string, { label: string; color: string }> = {
   LOCK:  { label: '잠금', color: '#8e24aa' },
 }
 
-type Stats = { total: number; today: number; locked: number; blockedIPs: number; honeypotHits: number }
+type Stats = {
+  total: number; today: number; locked: number; blockedIPs: number
+  honeypotHits: number; integrityViolations: number
+  tradeAnomalies: number; tradeBlocked: number
+}
 type AnomalyLog = {
   id: number; email: string | null; ip: string; anomaly_type: string
   action: string; detail: string; country: string | null; resolved: boolean; created_at: string
 }
 type LockedUser = { id: number; email: string; name: string; created_at: string }
 type ChartRow = { anomaly_type?: string; date?: string; count: number }
+type InferenceLog = {
+  id: number; user_id: number | null; ip: string; stock_code: string | null; horizon: string | null
+  decision: 'ALLOW' | 'DENY'; deny_reason: string | null; label: number | null
+  latency_ms: number | null; adapter: string | null; created_at: string
+}
+type InferenceSummary = { allowed24h: number; denied24h: number; denyByReason: { deny_reason: string | null; count: number }[] }
 
 const g = fetch  // alias for cleaner call sites
 
@@ -42,6 +64,8 @@ export default function AdminDashboard() {
   const [logTypeFilter, setLogTypeFilter] = useState('')
   const [lockedUsers, setLockedUsers] = useState<LockedUser[]>([])
   const [blockedIPs, setBlockedIPs] = useState<string[]>([])
+  const [inferenceLogs, setInferenceLogs] = useState<InferenceLog[]>([])
+  const [inferenceSummary, setInferenceSummary] = useState<InferenceSummary | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -49,13 +73,14 @@ export default function AdminDashboard() {
     setLoading(true)
     try {
       const opt = { credentials: 'include' as const }
-      const [s, ct, cd, hp, la, bi] = await Promise.all([
+      const [s, ct, cd, hp, la, bi, inf] = await Promise.all([
         g(`${API}/stats`, opt).then(r => r.json()),
         g(`${API}/chart/by-type`, opt).then(r => r.json()),
         g(`${API}/chart/by-day`, opt).then(r => r.json()),
         g(`${API}/honeypot-hits`, opt).then(r => r.json()),
         g(`${API}/locked-accounts`, opt).then(r => r.json()),
         g(`${API}/blocked-ips`, opt).then(r => r.json()),
+        g(`${API}/inference-logs`, opt).then(r => r.json()),
       ])
       setStats(s)
       setChartType(ct.map((r: ChartRow) => ({ ...r, label: TYPE_META[r.anomaly_type!]?.label ?? r.anomaly_type, count: Number(r.count) })))
@@ -63,6 +88,8 @@ export default function AdminDashboard() {
       setHoneypots(Array.isArray(hp) ? hp : [])
       setLockedUsers(la.users ?? [])
       setBlockedIPs(bi.ips ?? [])
+      setInferenceLogs(Array.isArray(inf?.logs) ? inf.logs : [])
+      setInferenceSummary(inf?.summary ?? null)
       setLastUpdated(new Date())
     } catch { /* ignore */ } finally {
       setLoading(false)
@@ -151,13 +178,18 @@ export default function AdminDashboard() {
         </div>
 
         {/* ── 1. 요약 통계 카드 ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '16px', marginBottom: '20px' }}>
           {[
-            { label: '전체 이상탐지', value: stats?.total ?? '—', color: '#1e88e5', icon: '🔍' },
-            { label: '오늘 탐지',     value: stats?.today ?? '—', color: '#e53935', icon: '⚡' },
-            { label: '허니팟 히트',  value: stats?.honeypotHits ?? '—', color: '#b71c1c', icon: '🍯' },
-            { label: '잠긴 계정',    value: stats?.locked ?? '—', color: '#8e24aa', icon: '🔒' },
-            { label: '차단된 IP',    value: stats?.blockedIPs ?? '—', color: '#fb8c00', icon: '🚫' },
+            { label: '전체 이상탐지', value: stats?.total ?? '—', color: '#1e88e5', icon: '🔍', note: '' },
+            { label: '오늘 탐지',     value: stats?.today ?? '—', color: '#e53935', icon: '⚡', note: '' },
+            { label: '허니팟 히트',  value: stats?.honeypotHits ?? '—', color: '#b71c1c', icon: '🍯', note: '' },
+            { label: '요청 무결성 위반', value: stats?.integrityViolations ?? '—', color: '#00897b', icon: '✍️', note: '' },
+            {
+              label: '거래 이상탐지', value: stats?.tradeAnomalies ?? '—', color: '#c62828', icon: '📈',
+              note: stats ? `주문 거절 ${stats.tradeBlocked}건` : '',
+            },
+            { label: '잠긴 계정',    value: stats?.locked ?? '—', color: '#8e24aa', icon: '🔒', note: '' },
+            { label: '차단된 IP',    value: stats?.blockedIPs ?? '—', color: '#fb8c00', icon: '🚫', note: '' },
           ].map(card => (
             <div key={card.label} style={{
               backgroundColor: '#fff', borderRadius: '14px', padding: '20px',
@@ -166,6 +198,7 @@ export default function AdminDashboard() {
               <div style={{ fontSize: '22px', marginBottom: '8px' }}>{card.icon}</div>
               <div style={{ fontSize: '28px', fontWeight: 800, color: card.color }}>{card.value.toLocaleString()}</div>
               <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>{card.label}</div>
+              {card.note && <div style={{ fontSize: '11px', color: '#bbb', marginTop: '2px' }}>{card.note}</div>}
             </div>
           ))}
         </div>
@@ -302,6 +335,56 @@ export default function AdminDashboard() {
                           차단 해제
                         </button>
                       </td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ── AI 추론 요청 감사 로그 ── */}
+        <div style={section}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <p style={{ ...sectionTitle, margin: 0 }}>AI 추론 요청 감사 로그
+              <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888', fontWeight: 400 }}>
+                최근 24시간 · 허용 {inferenceSummary?.allowed24h ?? 0}건 / 차단 {inferenceSummary?.denied24h ?? 0}건
+              </span>
+            </p>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {(inferenceSummary?.denyByReason ?? []).map(r => (
+                <span key={r.deny_reason ?? 'unknown'} style={badge('#00897b')}>
+                  {(r.deny_reason ?? 'UNKNOWN')} {Number(r.count)}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['시각', '사용자', 'IP', '종목', '구간', '판정', '사유/결과', '지연'].map(h => <th key={h} style={th}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {inferenceLogs.length === 0
+                  ? <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: '#ccc', padding: '28px' }}>추론 요청 없음</td></tr>
+                  : inferenceLogs.map(l => (
+                    <tr key={l.id}>
+                      <td style={{ ...td, whiteSpace: 'nowrap', color: '#888', fontSize: '12px' }}>
+                        {new Date(l.created_at).toLocaleString('ko-KR')}
+                      </td>
+                      <td style={td}>{l.user_id ?? '—'}</td>
+                      <td style={{ ...td, fontFamily: 'monospace', fontSize: '12px' }}>{l.ip}</td>
+                      <td style={td}>{l.stock_code ?? '—'}</td>
+                      <td style={td}>{l.horizon ?? '—'}</td>
+                      <td style={td}>
+                        <span style={badge(l.decision === 'ALLOW' ? '#3CB371' : '#e53935')}>
+                          {l.decision === 'ALLOW' ? '허용' : '차단'}
+                        </span>
+                      </td>
+                      <td style={{ ...td, color: '#555', fontSize: '12px' }}>
+                        {l.decision === 'DENY' ? (l.deny_reason ?? '—') : (l.label === 1 ? '상승' : l.label === 0 ? '하락' : '—')}
+                      </td>
+                      <td style={{ ...td, color: '#888', fontSize: '12px' }}>{l.latency_ms != null ? `${l.latency_ms}ms` : '—'}</td>
                     </tr>
                   ))
                 }

@@ -23,6 +23,9 @@ interface UserAttributes {
   updated_at?: Date
   deleted_at?: Date
   email_changed_at?: Date | null
+  // 계정 정보 변경 직후 고액 거래(M-2) 판정용. 탈취 계정의 전형적 인출 패턴이라
+  // 변경 시각을 남겨야 "변경 후 N분 내" 라는 조건을 평가할 수 있다.
+  password_changed_at?: Date | null
   is_phone_verified: boolean
   pin_hash?: string | null
   is_survey_completed: boolean
@@ -47,6 +50,7 @@ class User
   public is_locked!: boolean
   public is_phone_verified!: boolean
   public email_changed_at?: Date | null
+  public password_changed_at?: Date | null
   public pin_hash?: string | null
   public is_survey_completed!: boolean
   public investment_type_id?: number | null
@@ -90,6 +94,7 @@ User.init(
     },
     is_phone_verified: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
     email_changed_at: { type: DataTypes.DATE, allowNull: true },
+    password_changed_at: { type: DataTypes.DATE, allowNull: true },
     pin_hash: { type: DataTypes.STRING(255), allowNull: true },
     is_survey_completed: { type: DataTypes.TINYINT, allowNull: false, defaultValue: 0 },
     investment_type_id: { type: DataTypes.INTEGER, allowNull: true },

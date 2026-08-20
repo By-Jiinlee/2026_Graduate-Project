@@ -1,6 +1,8 @@
 import { useState, useEffect, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import { API_BASE } from '../utils/api'
+
 export default function WritePost() {
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
@@ -16,7 +18,7 @@ export default function WritePost() {
   useEffect(() => {
     const fetchNickname = async () => {
       try {
-        const res = await fetch('http://localhost:3000/api/auth/me', { credentials: 'include' });
+        const res = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' });
         if (!res.ok) { 
           setNicknameLoading(false); 
           return; 

@@ -8,7 +8,7 @@ export function blockIP(ip: string): void {
   console.warn(`[Security] IP 차단 추가: ${ip}`)
 }
 
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string): boolean {
   return (
     ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' ||
     ip.startsWith('10.') || ip.startsWith('192.168.') ||

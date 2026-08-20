@@ -1,6 +1,8 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useEffect, useState, useRef, type ChangeEvent } from 'react';
 
+import { API_BASE } from '../utils/api'
+
 export interface Comment {
   id: number;
   author: string;
@@ -67,7 +69,7 @@ export default function PostDetail() {
   useEffect(() => {
     const fetchNickname = async () => {
       try {
-        const res = await fetch('http://localhost:3000/api/auth/me', { credentials: 'include' });
+        const res = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' });
         if (!res.ok) { 
           setNicknameLoading(false); 
           return; 

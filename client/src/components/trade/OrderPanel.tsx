@@ -6,6 +6,8 @@ import { sepolia } from 'viem/chains'
 import { useTradeModeStore } from '../../store/tradeModeStore'
 import PinPad from './PinPad'
 
+import { API_BASE } from '../../utils/api'
+
 interface Props {
   stockId: number
   stockCode: string
@@ -37,7 +39,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
 
   useEffect(() => {
     if (!isLoggedIn()) return
-    axios.get('http://localhost:3000/api/auth/me', { withCredentials: true })
+    axios.get(`${API_BASE}/api/auth/me`, { withCredentials: true })
       .then(res => setIsPhoneVerified(!!res.data.is_phone_verified))
       .catch(() => setIsPhoneVerified(false))
   }, [])
@@ -45,7 +47,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
   useEffect(() => {
     if (mode !== 'real' || !isLoggedIn()) return
     setRealStatus('loading')
-    fetch('http://localhost:3000/api/trade/real/account', { credentials: 'include' })
+    fetch(`${API_BASE}/api/trade/real/account`, { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         if (data.isRegistered) {
@@ -86,14 +88,14 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
         // 실거래 — KIS API 직접 주문
         const endpoint = side === 'buy' ? '/api/trade/real/buy' : '/api/trade/real/sell'
         const res = await axios.post(
-          `http://localhost:3000${endpoint}`,
+          `${API_BASE}${endpoint}`,
           { stockId, stockCode, quantity: Number(quantity), orderType, price: orderType === 'limit' ? Number(limitPrice) : currentPrice, pin },
           { withCredentials: true },
         )
         setMessage({ text: res.data.message, ok: true })
         setQuantity('')
         // 잔고 갱신
-        fetch('http://localhost:3000/api/trade/real/account', { credentials: 'include' })
+        fetch(`${API_BASE}/api/trade/real/account`, { credentials: 'include' })
           .then(r => r.json())
           .then(data => { if (data.buyableAmount != null) setRealBuyable(data.buyableAmount) })
           .catch(() => {})
@@ -106,7 +108,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
 
       try {
         const res = await axios.post(
-          `http://localhost:3000${endpoint}`,
+          `${API_BASE}${endpoint}`,
           { stockId, stockCode, quantity: Number(quantity), orderType, limitPrice: limitPrice ? Number(limitPrice) : undefined, pin },
           { withCredentials: true },
         )
@@ -125,7 +127,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
       const [address] = await walletClient.requestAddresses()
 
       const nonceRes = await axios.get(
-        `http://localhost:3000/api/auth/trade-nonce?address=${address}`,
+        `${API_BASE}/api/auth/trade-nonce?address=${address}`,
         { withCredentials: true },
       )
       const nonce = BigInt(nonceRes.data.nonce)
@@ -146,7 +148,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
       tradeSignature = await walletClient.signMessage({ account: address, message: { raw: msgHash } })
 
       const res = await axios.post(
-        `http://localhost:3000${endpoint}`,
+        `${API_BASE}${endpoint}`,
         { stockId, stockCode, quantity: Number(quantity), orderType, limitPrice: limitPrice ? Number(limitPrice) : undefined, pin, tradeSignature, signedAmount: amount.toString() },
         { withCredentials: true },
       )
