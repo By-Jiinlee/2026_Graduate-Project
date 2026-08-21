@@ -745,6 +745,49 @@ export async function recordInferenceAbuse(params: {
 // ─────────────────────────────────────────────
 const tradeEmailCooldown = new Map<number, number>()
 
+/**
+ * 적응형 인증(H) 판정 기록.
+ *
+ * 관측 모드에서도 기록한다 — 강제를 켜기 전에 실제 등급 분포를 모으는 것이 목적이다.
+ * 통과(NONE) 건은 호출자가 걸러야 한다. 전 로그인이 기록되면 집계가 무의미해진다.
+ *
+ * 이메일 알림은 보내지 않는다. 재인증 요구 자체는 사용자가 화면에서 즉시 인지하고,
+ * 관측 모드에서는 아무 일도 일어나지 않으므로 알릴 내용이 없다.
+ */
+export async function recordAdaptiveDecision(params: {
+  userId: number
+  email?: string
+  ip: string
+  userAgent?: string
+  requirement: string
+  score: number
+  enforced: boolean
+  reason: string
+}): Promise<void> {
+  try {
+    const geo = await getLocationFromIp(params.ip).catch(() => ({ country: undefined }))
+    const email =
+      params.email ??
+      (await User.findByPk(params.userId).then((u) => u?.email ?? '').catch(() => ''))
+
+    await logAnomaly({
+      userId: params.userId,
+      email,
+      ip: params.ip,
+      userAgent: params.userAgent,
+      type: 'ADAPTIVE_STEPUP',
+      // 관측 모드는 막지 않았으므로 ALERT. 강제 모드에서 실제 요구했으면 BLOCK.
+      action: params.enforced ? 'BLOCK' : 'ALERT',
+      detail:
+        `[적응형 인증] 요구=${params.requirement} 점수=${params.score} ` +
+        `모드=${params.enforced ? '강제' : '관측'} — ${params.reason}`,
+      country: geo.country,
+    })
+  } catch (err) {
+    console.error('[Anomaly] 적응형 인증 판정 기록 오류:', err)
+  }
+}
+
 export async function recordTradeAnomaly(params: {
   userId: number
   email?: string
@@ -766,10 +809,22 @@ export async function recordTradeAnomaly(params: {
     const email = params.email ?? (await User.findByPk(params.userId).then((u) => u?.email ?? '').catch(() => ''))
 
     const signals = params.types ?? []
+    // 맥락 신호(M-2/M-3) > 금액 이상 > 관측 신호(M-6) 순.
+    // 관측 신호를 맨 뒤에 두는 이유: 금액 이상과 동시에 서면 대응 우선순위는
+    // 금액 쪽이고, 단독으로 섰을 때만 빈도 유형으로 분류되어야 하기 때문이다.
+    // 관측 신호 목록. 원본은 tradeAnomalyService.OBSERVATIONAL_SIGNALS 이지만
+    // 그쪽이 이 파일을 import 하고 있어(순환) 여기서는 값을 복제한다.
+    // 신호를 추가할 때 두 곳을 함께 고칠 것.
+    const OBSERVATIONAL = ['TRADE_FREQUENCY_SPIKE', 'ROUND_AMOUNT_PATTERN', 'MULTI_ACCOUNT_SAME_IP']
+    const gating = signals.filter((sig) => !OBSERVATIONAL.includes(sig))
+
     const type: AnomalyType =
       signals.includes('POST_CREDENTIAL_CHANGE') ? 'POST_CHANGE_TRADE'
         : signals.includes('DORMANT_ACTIVITY') ? 'DORMANT_ACCOUNT_ACTIVITY'
-        : 'ABNORMAL_TRADE_AMOUNT'
+          : gating.length > 0 ? 'ABNORMAL_TRADE_AMOUNT'
+            : signals.includes('MULTI_ACCOUNT_SAME_IP') ? 'MULTI_ACCOUNT_SAME_IP'
+              : signals.includes('TRADE_FREQUENCY_SPIKE') ? 'TRADE_FREQUENCY_SPIKE'
+                : 'ROUND_AMOUNT_PATTERN'
 
     await logAnomaly({
       userId: params.userId,

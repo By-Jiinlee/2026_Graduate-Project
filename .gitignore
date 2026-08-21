@@ -38,3 +38,6 @@ CLAUDE.md
 CLAUDE.local.md
 server/cache/*.json
 .claude/
+
+# 작업 산출 문서 (저장소 공유 대상 아님)
+UpTick_*.txt

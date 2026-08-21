@@ -65,6 +65,68 @@ export async function getChartByDay(req: Request, res: Response): Promise<void> 
   res.json(rows)
 }
 
+// 적응형 인증(H) 판정 집계
+//
+// 등급·점수는 detail 문자열에 담겨 있다(anomaly_logs 에 전용 컬럼이 없어서다).
+// 우리가 만든 고정 포맷이라 파싱이 안전하지만, 포맷을 바꿀 때는
+// anomalyService.recordAdaptiveDecision 과 이 정규식을 함께 고쳐야 한다.
+const ADAPTIVE_PATTERN = /요구=(\w+) 점수=(\d+) 모드=(관측|강제)/
+
+export async function getAdaptiveAuthStats(req: Request, res: Response): Promise<void> {
+  const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 90)
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+  const rows = (await AnomalyLog.findAll({
+    where: { anomaly_type: 'ADAPTIVE_STEPUP', created_at: { [Op.gte]: since } },
+    attributes: ['id', 'email', 'ip', 'detail', 'action', 'created_at'],
+    order: [['created_at', 'DESC']],
+    limit: 500,
+    raw: true,
+  })) as unknown as Array<{
+    id: number; email: string | null; ip: string
+    detail: string; action: string; created_at: Date
+  }>
+
+  const byRequirement: Record<string, number> = { PIN: 0, EMAIL_OTP: 0, WALLET: 0 }
+  const byMode = { 관측: 0, 강제: 0 }
+  let scoreSum = 0
+  let scoreCount = 0
+
+  const recent = rows.map((r) => {
+    const m = ADAPTIVE_PATTERN.exec(r.detail ?? '')
+    const requirement = m?.[1] ?? 'UNKNOWN'
+    const score = m ? Number(m[2]) : null
+    const mode = (m?.[3] ?? '관측') as '관측' | '강제'
+
+    if (requirement in byRequirement) byRequirement[requirement]++
+    byMode[mode]++
+    if (score != null) { scoreSum += score; scoreCount++ }
+
+    return {
+      id: r.id,
+      email: r.email,
+      ip: r.ip,
+      requirement,
+      score,
+      mode,
+      // 근거(어떤 신호가 몇 점 올렸는지)는 detail 뒤쪽에 그대로 있다
+      reason: (r.detail ?? '').split('—').slice(1).join('—').trim(),
+      createdAt: r.created_at,
+    }
+  })
+
+  res.json({
+    windowDays: days,
+    total: rows.length,
+    // 통과(NONE)는 애초에 기록하지 않으므로 여기 집계에 없다 — 프론트에 명시한다.
+    note: '통과(NONE) 판정은 기록 대상이 아니라 집계에 포함되지 않습니다',
+    byRequirement,
+    byMode,
+    averageScore: scoreCount > 0 ? Math.round((scoreSum / scoreCount) * 10) / 10 : null,
+    recent: recent.slice(0, 100),
+  })
+}
+
 // 최근 허니팟 히트
 export async function getHoneypotHits(req: Request, res: Response): Promise<void> {
   const rows = await AnomalyLog.findAll({

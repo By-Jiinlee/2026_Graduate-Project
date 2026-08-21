@@ -61,6 +61,10 @@ router.post(
   analyzeAfterLogin,
 )
 
+// 적응형 인증(H) — 위험 점수가 EMAIL_OTP 구간일 때 클라이언트가 코드 발급을 요청한다.
+// 응답이 항상 동일하므로 계정 열거에 쓰이지 않는다.
+router.post('/login/step-up/email', loginRateLimiter, authController.requestStepUpEmailCode)
+
 // Step2: ① loginStep2 → ② analyzeAfterLogin(시간대/동시세션/국가 탐지)
 router.post(
   '/login/step2',

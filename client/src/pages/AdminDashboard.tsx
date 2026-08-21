@@ -25,6 +25,10 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   CREDENTIAL_STUFFING:{ label: '반복실패 후 성공', color: '#ad1457' },
   POST_CHANGE_TRADE:  { label: '계정변경 직후 거래', color: '#ef6c00' },
   DORMANT_ACCOUNT_ACTIVITY: { label: '휴면계정 활동', color: '#4527a0' },
+  // 관측 신호 — 판정을 바꾸지 않고 기록만 남기는 유형이라 회색 계열로 구분한다.
+  TRADE_FREQUENCY_SPIKE: { label: '거래 빈도 급증(관측)', color: '#546e7a' },
+  ROUND_AMOUNT_PATTERN:  { label: '반올림 금액 반복(관측)', color: '#78909c' },
+  MULTI_ACCOUNT_SAME_IP: { label: '동일IP 다계정(관측)', color: '#607d8b' },
 }
 
 const ACTION_META: Record<string, { label: string; color: string }> = {

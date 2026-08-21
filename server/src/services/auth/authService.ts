@@ -95,6 +95,53 @@ export const sendEmailCode = async (email: string): Promise<void> => {
   await sendVerificationEmail(email, code)
 }
 
+/**
+ * 로그인 재인증(step-up)용 이메일 인증코드 발송.
+ *
+ * 회원가입용 `sendEmailCode` 를 재사용할 수 없다 — 그쪽은 "이미 사용 중인 이메일" 을
+ * 거부하는데, step-up 은 **이미 존재하는 계정**에 보내야 하기 때문이다.
+ * 코드 저장·만료·시도 제한은 같은 `EmailVerification` 테이블과 `verifyEmailCode` 를 쓴다.
+ *
+ * 남용 방지는 회원가입 경로와 동일한 값을 유지한다(일 5회 / 1분 쿨타임 / 5분 만료).
+ * 한도 초과 시 예외를 던지므로, 호출자는 이를 "OTP 발급 실패" 로 처리하고
+ * 더 강한 수단(지갑 서명)으로 승격시켜야 한다 — 발급 실패가 곧 통과가 되면 안 된다.
+ */
+export const sendStepUpCode = async (email: string): Promise<void> => {
+  const blacklisted = await Blacklist.findOne({ where: { email } })
+  if (blacklisted) throw new Error('이용이 제한된 계정입니다')
+
+  await EmailVerification.update(
+    { is_used: true },
+    { where: { email, is_used: false } },
+  )
+
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  const sendCount = await EmailVerification.count({
+    where: { email, created_at: { [Op.gte]: todayStart } },
+  })
+  if (sendCount >= 5) throw new Error('일일 인증 요청 한도를 초과했습니다')
+
+  const lastSent = await EmailVerification.findOne({
+    where: { email },
+    order: [['created_at', 'DESC']],
+  })
+  if (lastSent) {
+    const diff = Date.now() - new Date(lastSent.created_at!).getTime()
+    if (diff < 60 * 1000) throw new Error('1분 후 다시 요청해주세요')
+  }
+
+  const code = crypto.randomInt(100000, 999999).toString()
+  await EmailVerification.create({
+    email,
+    code,
+    expires_at: new Date(Date.now() + 5 * 60 * 1000),
+    is_used: false,
+    fail_count: 0,
+  })
+  await sendVerificationEmail(email, code)
+}
+
 // 이메일 인증코드 검증
 export const verifyEmailCode = async (
   email: string,

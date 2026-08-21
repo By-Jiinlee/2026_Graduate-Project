@@ -4,6 +4,7 @@ import { checkIPAbuse } from '../../services/auth/abuseIPDBService'
 import { blockIP } from '../security/ipBlockMiddleware'
 import AnomalyLog from '../../models/auth/AnomalyLog'
 import { getClientIp } from '../../utils/getClientIp'
+import { assessRisk, collectRiskSignals, decideAuthRequirement } from '../../services/auth/riskEngine'
 
 // ─────────────────────────────────────────────
 // 0. AbuseIPDB — 알려진 악성 IP 차단
@@ -14,6 +15,9 @@ export async function checkAbuseIP(req: Request, res: Response, next: NextFuncti
 
   try {
     const { isAbusive, score } = await checkIPAbuse(ip)
+    // 차단 임계 미만이라도 점수는 위험 신호다(회색 지대). 여기서 이미 외부 API 를
+    // 호출했으므로 점수를 넘겨 적응형 인증이 재조회 없이 재사용하게 한다.
+    res.locals.abuseScore = score
     if (!isAbusive) {
       next()
       return
@@ -128,6 +132,44 @@ export async function analyzeAfterLogin(
     // 이상 감지됐지만 차단 수준 아님 → 경고 헤더 추가
     if (anomalyResult.anomalies.length > 0) {
       res.setHeader('X-Security-Warning', anomalyResult.anomalies.join(','))
+    }
+
+    // ── 적응형 인증(H) — 요구 인증 강도 산출 ──────────────────
+    //
+    // 여기서 계산하는 이유: 위험 점수는 이번 로그인의 탐지 결과(anomalyResult)를
+    // 입력으로 쓰는데, 그 값이 확정되는 시점이 컨트롤러가 아니라 이 미들웨어다.
+    //
+    // 응답에 requiredAuth 를 **추가**하되 기존 requireWalletSign 은 그대로 둔다 —
+    // 구버전 클라이언트가 깨지지 않게 하기 위함이다. 그리고 이 값은 어디까지나
+    // 안내용이며, 실제 강제는 step2 가 서버에서 재계산해 수행한다(클라이언트 신뢰 금지).
+    if (loginSuccess && loginUserId != null && responseData && typeof responseData === 'object') {
+      try {
+        const collected = await collectRiskSignals({
+          userId: loginUserId,
+          ip,
+          loginAnomalies: anomalyResult.anomalies,
+          abuseScore: res.locals.abuseScore,
+        })
+        const risk = assessRisk(collected.signals)
+        const decision = decideAuthRequirement({
+          isTrustedDevice: res.locals.isTrustedDevice === true,
+          risk,
+          hasPin: collected.hasPin,
+          // step2 와 같은 입력으로 판정해야 안내값과 실제 요구가 어긋나지 않는다.
+          degraded: collected.degraded,
+        })
+        responseData.requiredAuth = decision.requirement
+        responseData.riskScore = risk.score
+        responseData.riskBand = risk.bandLabel
+        if (collected.degraded) {
+          // 신호 수집이 부분 실패했다 — 점수가 과소평가됐을 수 있음을 남긴다.
+          console.warn('[AdaptiveAuth] 신호 수집 degraded — 점수 과소평가 가능:', risk.detail)
+        }
+      } catch (err) {
+        // 점수 산출 실패가 로그인을 막지는 않는다. 다만 등급을 낮추지도 않는다 —
+        // requiredAuth 를 비워두면 step2 가 서버에서 다시 계산해 강제한다.
+        console.error('[AdaptiveAuth] 위험 점수 산출 실패:', err)
+      }
     }
 
     // 정상 응답

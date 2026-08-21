@@ -8,6 +8,7 @@ import cookieParser from 'cookie-parser'
 import morgan from 'morgan'
 import { connectDB } from './config/database'
 import { corsOptions, socketCorsOptions, describeCorsPolicy } from './config/cors'
+import { initUserChannels } from './services/socket/userChannel'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
 import honeypotRouter from './routes/security/honeypotRouter'
@@ -42,6 +43,8 @@ dotenv.config()
 const app = express()
 const httpServer = createServer(app)
 const io = new Server(httpServer, { cors: socketCorsOptions })
+// 개인 이벤트(체결 알림 등)를 위한 사용자별 채널 — 쿠키 JWT 로 방을 배정한다.
+initUserChannels(io)
 const PORT = process.env.PORT || 3000
 
 // 미들웨어

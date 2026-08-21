@@ -9,6 +9,9 @@ import {
   revokeTrustedDevice,
   DEVICE_COOKIE_NAME,
 } from '../../services/auth/trustedDeviceService'
+import { assessRisk, collectRiskSignals, decideAuthRequirement } from '../../services/auth/riskEngine'
+import { recordAdaptiveDecision } from '../../services/auth/anomalyService'
+import { verifyPin } from '../../services/trade/virtualTradeService'
 import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
 import { issueSessionSecret, revokeSessionSecret } from '../../services/auth/hmacService'
 import Wallet from '../../models/user/Wallet'
@@ -154,6 +157,9 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
     res.locals.loginSuccess = true
     res.locals.loginEmail = email
     res.locals.loginUserId = result.userId
+    // 적응형 인증(H) — 위험 점수 판정은 탐지 결과가 나온 뒤라야 하므로
+    // analyzeAfterLogin 에서 수행한다. 여기서는 입력만 넘긴다.
+    res.locals.isTrustedDevice = isTrustedDevice
 
     res.locals.responseData = {
       message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
@@ -185,6 +191,31 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
   }
 }
 
+/**
+ * 적응형 인증(H) — 로그인 재인증용 이메일 인증코드 요청.
+ *
+ * 응답을 항상 동일하게 돌려준다. 성공/실패를 구분해 주면 임의 userId 를 넣어보는 것만으로
+ * 계정 존재 여부를 알 수 있다(계정 열거). 실제 발급 여부는 소유자만 메일함에서 확인한다.
+ *
+ * 남용 방지는 sendStepUpCode 내부의 일 5회 / 1분 쿨타임에 위임한다.
+ */
+export const requestStepUpEmailCode = async (req: Request, res: Response) => {
+  const { userId } = req.body
+  const generic = { message: '등록된 이메일로 인증코드를 보냈습니다. 5분 안에 입력해주세요.' }
+
+  if (!userId || !Number.isInteger(Number(userId))) return res.status(200).json(generic)
+
+  try {
+    const user = await User.findByPk(Number(userId))
+    if (user) await authService.sendStepUpCode(user.email)
+  } catch (err) {
+    // 한도 초과·발송 실패도 동일 응답으로 감춘다. 코드가 없으면 step2 가 거부하므로
+    // 이 경로가 인증을 약화시키지 않는다.
+    console.warn('[AdaptiveAuth] step-up 코드 발송 실패:', (err as Error).message)
+  }
+  return res.status(200).json(generic)
+}
+
 // 2단계: 지갑 서명 검증 → JWT 발급
 export const loginStep2 = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -204,14 +235,92 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
       ? await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip)
       : false
 
-    if (!isTrustedDevice && !signature) {
+    // ── 적응형 인증(H) — 요구 강도를 서버에서 재계산해 강제한다 ──────────
+    //
+    // step1 응답의 requiredAuth 는 **안내용**이다. 클라이언트가 그 값을 낮춰 보내면
+    // 그대로 통과하는 구조가 되면 안 되므로 실제 강제는 여기서 다시 계산한다.
+    // (요청 본문의 skipSignature 를 신뢰해 2단계가 무력화됐던 과거 취약점과 같은 유형)
+    const collected = await collectRiskSignals({ userId, ip, abuseScore: res.locals.abuseScore })
+    const risk = assessRisk(collected.signals)
+    const decision = decideAuthRequirement({
+      isTrustedDevice,
+      risk,
+      hasPin: collected.hasPin,
+      degraded: collected.degraded,
+    })
+
+    const denyStepUp = (message: string, code: string) => {
       res.locals.loginSuccess = false
       res.locals.loginEmail = req.body.email ?? ''
-      res.locals.responseData = { message: '지갑 서명이 필요합니다' }
+      res.locals.responseData = {
+        message,
+        code,
+        requiredAuth: decision.requirement,
+        riskScore: risk.score,
+      }
       res.locals.responseStatus = 400
       res.locals.isStep2 = true
       return next()
     }
+
+    // ── 단계적 적용 게이트 ────────────────────────────────────────
+    //
+    // PIN·OTP 입력 화면이 프론트에 아직 없다. 강제를 바로 켜면 "신뢰 기기 + 위험 신호"
+    // 사용자가 400 을 받고 로그인 자체를 못 한다(예: 해외 접속 40점 → PIN 요구).
+    // 그래서 기본값은 '판정만 하고 강제하지 않음' 이다.
+    //
+    // 중요: 강제를 꺼도 **기존 정책은 그대로 강제한다.** 미신뢰 기기의 지갑 서명 요구는
+    // 게이트와 무관하게 항상 적용되므로, 이 플래그가 꺼져 있어도 기존보다 약해지지 않는다.
+    // 프론트 분기가 준비되면 ADAPTIVE_AUTH_ENFORCE=true 로 켠다.
+    const enforceAdaptive = process.env.ADAPTIVE_AUTH_ENFORCE === 'true'
+
+    if (!isTrustedDevice && !signature) {
+      // 기존 정책 — 게이트와 무관하게 항상 적용
+      return denyStepUp('지갑 서명이 필요합니다', 'WALLET_REQUIRED')
+    }
+
+    // 판정 기록 — 관측 모드에서도 남긴다. 강제를 켜기 전에 실제 등급 분포를 모으는 것이
+    // 이 기록의 1차 목적이다. 통과(NONE)는 제외한다(전 로그인이 쌓여 집계가 무의미해짐).
+    // 로그인 응답을 지연시키지 않도록 await 하지 않는다.
+    if (decision.requirement !== 'NONE') {
+      void recordAdaptiveDecision({
+        userId,
+        ip,
+        userAgent,
+        requirement: decision.requirement,
+        score: risk.score,
+        enforced: enforceAdaptive,
+        reason: decision.reason,
+      })
+    }
+
+    if (enforceAdaptive && decision.requirement === 'WALLET' && !signature) {
+      return denyStepUp('지갑 서명이 필요합니다', 'WALLET_REQUIRED')
+    }
+
+    if (enforceAdaptive && decision.requirement === 'EMAIL_OTP') {
+      const { emailCode } = req.body
+      if (!emailCode) return denyStepUp('이메일 인증코드가 필요합니다', 'EMAIL_OTP_REQUIRED')
+      const owner = await User.findByPk(userId)
+      if (!owner) return denyStepUp('인증에 실패했습니다', 'EMAIL_OTP_REQUIRED')
+      try {
+        await authService.verifyEmailCode(owner.email, emailCode)
+      } catch (e: any) {
+        return denyStepUp(e.message ?? '인증코드가 올바르지 않습니다', 'EMAIL_OTP_INVALID')
+      }
+    }
+
+    if (enforceAdaptive && decision.requirement === 'PIN') {
+      const { pin } = req.body
+      if (!pin) return denyStepUp('PIN 입력이 필요합니다', 'PIN_REQUIRED')
+      try {
+        await verifyPin(userId, pin)
+      } catch (e: any) {
+        return denyStepUp(e.message ?? 'PIN 이 올바르지 않습니다', 'PIN_INVALID')
+      }
+    }
+
+
 
     const { user, accessToken, refreshToken } = await authService.loginStep2(
       userId,

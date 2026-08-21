@@ -87,6 +87,9 @@ export async function get(path: string, opts: ReqOptions): Promise<Res> {
   return { status: res.status, data: res.data, headers: res.headers as any }
 }
 
+// DELETE 도 상태 변경 요청이라 hmacMiddleware 의 검증 대상이다(GET/HEAD 만 통과).
+// 본문이 없는 요청은 서버 rawBody 가 빈 문자열이므로 빈 문자열에 서명해야 한다 —
+// 클라이언트 tradeSigning.signedFetch 와 동일한 규약.
 export async function del(path: string, opts: ReqOptions): Promise<Res> {
   const headers: Record<string, string> = {
     'User-Agent': UA,
@@ -94,6 +97,11 @@ export async function del(path: string, opts: ReqOptions): Promise<Res> {
     ...(opts.headers ?? {}),
   }
   if (opts.cookie) headers['Cookie'] = opts.cookie
+  if (opts.sign) {
+    headers['X-Signature'] = opts.sign.sig
+    headers['X-Timestamp'] = opts.sign.ts
+    headers['X-Nonce'] = opts.sign.nonce
+  }
 
   const res = await axios.delete(`${BASE}${path}`, { headers, validateStatus: () => true })
   return { status: res.status, data: res.data, headers: res.headers as any }

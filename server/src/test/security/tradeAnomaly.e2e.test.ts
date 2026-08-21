@@ -333,7 +333,7 @@ async function main(): Promise<void> {
   let cancelled = 0
   if (!hasFlag('keep')) {
     for (const id of pendingIds) {
-      const res = await del(`/api/trade/virtual/orders/${id}`, { ip: IP.TRADE, cookie })
+      const res = await del(`/api/trade/virtual/orders/${id}`, { ip: IP.TRADE, cookie, sign: sign('') })
       if (res.status === 200) cancelled++
       else failures.push(`정리 실패 — 주문 ${id} 취소 불가(${res.status})`)
     }
