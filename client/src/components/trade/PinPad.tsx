@@ -11,7 +11,7 @@ const KEYS = ['1','2','3','4','5','6','7','8','9','','0','⌫']
 
 export default function PinPad({ title, subtitle, onConfirm, onCancel }: Props) {
   const [pin, setPin] = useState('')
-  const [shake, setShake] = useState(false)
+
 
   // 6자리 채워지면 자동 제출
   useEffect(() => {

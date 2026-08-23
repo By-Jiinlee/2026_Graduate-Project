@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  LineChart, Line, Legend,
+  LineChart, Line, Legend, PieChart, Pie, Cell,
 } from 'recharts'
 
 import { API_BASE } from '../utils/api'
@@ -9,12 +9,12 @@ import { API_BASE } from '../utils/api'
 const API = `${API_BASE}/api/admin/security`
 
 const TYPE_META: Record<string, { label: string; color: string }> = {
-  BRUTE_FORCE:        { label: '브루트포스',    color: '#e53935' },
+  BRUTE_FORCE:        { label: '브루트포스',     color: '#e53935' },
   ABNORMAL_TIME:      { label: '비정상 시간대', color: '#fb8c00' },
-  CONCURRENT_SESSION: { label: '동시 세션',    color: '#8e24aa' },
-  ABNORMAL_COUNTRY:   { label: '비정상 국가',  color: '#1e88e5' },
+  CONCURRENT_SESSION: { label: '동시 세션',     color: '#8e24aa' },
+  ABNORMAL_COUNTRY:   { label: '비정상 국가',   color: '#1e88e5' },
   HONEYPOT:           { label: '허니팟',       color: '#b71c1c' },
-  ABUSE_IP:           { label: '악성 IP',      color: '#d84315' },
+  ABUSE_IP:           { label: '악성 IP',       color: '#d84315' },
   REQUEST_TAMPERING:  { label: '요청 위·변조',  color: '#00897b' },
   REPLAY_ATTACK:      { label: '요청 재전송',   color: '#5e35b1' },
   ABNORMAL_TRADE_AMOUNT: { label: '거래 이상',   color: '#c62828' },
@@ -25,7 +25,6 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   CREDENTIAL_STUFFING:{ label: '반복실패 후 성공', color: '#ad1457' },
   POST_CHANGE_TRADE:  { label: '계정변경 직후 거래', color: '#ef6c00' },
   DORMANT_ACCOUNT_ACTIVITY: { label: '휴면계정 활동', color: '#4527a0' },
-  // 관측 신호 — 판정을 바꾸지 않고 기록만 남기는 유형이라 회색 계열로 구분한다.
   TRADE_FREQUENCY_SPIKE: { label: '거래 빈도 급증(관측)', color: '#546e7a' },
   ROUND_AMOUNT_PATTERN:  { label: '반올림 금액 반복(관측)', color: '#78909c' },
   MULTI_ACCOUNT_SAME_IP: { label: '동일IP 다계정(관측)', color: '#607d8b' },
@@ -47,7 +46,7 @@ type AnomalyLog = {
   action: string; detail: string; country: string | null; resolved: boolean; created_at: string
 }
 type LockedUser = { id: number; email: string; name: string; created_at: string }
-type ChartRow = { anomaly_type?: string; date?: string; count: number }
+type ChartRow = { anomaly_type?: string; date?: string; count: number; label?: string }
 type InferenceLog = {
   id: number; user_id: number | null; ip: string; stock_code: string | null; horizon: string | null
   decision: 'ALLOW' | 'DENY'; deny_reason: string | null; label: number | null
@@ -55,7 +54,7 @@ type InferenceLog = {
 }
 type InferenceSummary = { allowed24h: number; denied24h: number; denyByReason: { deny_reason: string | null; count: number }[] }
 
-const g = fetch  // alias for cleaner call sites
+const g = fetch
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState<Stats | null>(null)
@@ -112,7 +111,6 @@ export default function AdminDashboard() {
   useEffect(() => { fetchAll() }, [fetchAll])
   useEffect(() => { fetchLogs() }, [fetchLogs])
 
-  // 30초 자동 새로고침
   useEffect(() => {
     const t = setInterval(() => { fetchAll(); fetchLogs() }, 30000)
     return () => clearInterval(t)
@@ -134,7 +132,6 @@ export default function AdminDashboard() {
     fetchAll()
   }
 
-  // ── 스타일 상수 ──────────────────────────────────────────
   const section: React.CSSProperties = {
     backgroundColor: '#fff', borderRadius: '16px', padding: '24px',
     boxShadow: '0 2px 12px rgba(0,0,0,0.07)', marginBottom: '20px',
@@ -160,6 +157,14 @@ export default function AdminDashboard() {
   })
 
   const totalPages = Math.ceil(logTotal / 20)
+
+  // 적응형 인증 보안 등급 분포 더미/집계 데이터 (도넛 차트용)
+  const adaptiveAuthData = [
+    { name: '일반 (NONE)', value: 45, color: '#3CB371' },
+    { name: '지갑서명 (WALLET)', value: 25, color: '#1e88e5' },
+    { name: 'PIN 인증', value: 20, color: '#8e24aa' },
+    { name: '이메일 OTP', value: 10, color: '#fb8c00' },
+  ]
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f4f6f9', padding: '32px 28px', fontFamily: 'sans-serif' }}>
@@ -200,15 +205,15 @@ export default function AdminDashboard() {
               boxShadow: '0 2px 8px rgba(0,0,0,0.06)', borderTop: `4px solid ${card.color}`,
             }}>
               <div style={{ fontSize: '22px', marginBottom: '8px' }}>{card.icon}</div>
-              <div style={{ fontSize: '28px', fontWeight: 800, color: card.color }}>{card.value.toLocaleString()}</div>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: card.color }}>{typeof card.value === 'number' ? card.value.toLocaleString() : card.value}</div>
               <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>{card.label}</div>
               {card.note && <div style={{ fontSize: '11px', color: '#bbb', marginTop: '2px' }}>{card.note}</div>}
             </div>
           ))}
         </div>
 
-        {/* ── 2. 차트 ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        {/* ── 2. 차트 영역 (유형별, 추이, 적응형 인증 통계) ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
           {/* 유형별 탐지 현황 */}
           <div style={section}>
@@ -221,10 +226,9 @@ export default function AdminDashboard() {
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                    <Tooltip formatter={(v: number) => [`${v}건`, '탐지 수']} />
+                    <Tooltip formatter={(v: any) => [`${v ?? 0}건`, '탐지 수']} />
                     <Bar dataKey="count" radius={[6, 6, 0, 0]}
                       fill="#3CB371"
-                      label={{ position: 'top', fontSize: 11, fill: '#555' }}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -244,7 +248,7 @@ export default function AdminDashboard() {
                     <XAxis dataKey="date" tick={{ fontSize: 11 }}
                       tickFormatter={(v: string) => v.slice(5)} />
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                    <Tooltip formatter={(v: number) => [`${v}건`, '탐지 수']}
+                    <Tooltip formatter={(v: any) => [`${v ?? 0}건`, '탐지 수']}
                       labelFormatter={(l: string) => `날짜: ${l}`} />
                     <Legend />
                     <Line type="monotone" dataKey="count" stroke="#e53935" strokeWidth={2}
@@ -254,6 +258,23 @@ export default function AdminDashboard() {
               )
             }
           </div>
+
+          {/* 적응형 인증 등급 분포 카드 (추가된 명세 통계) */}
+          <div style={section}>
+            <p style={sectionTitle}>적응형 인증 등급 분포</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie data={adaptiveAuthData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} innerRadius={35} label={{ fontSize: 10 }}>
+                  {adaptiveAuthData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v: any) => [`${v}%`, '비율']} />
+                <Legend iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
         </div>
 
         {/* ── 3. 허니팟 히트 현황 ── */}
@@ -273,7 +294,7 @@ export default function AdminDashboard() {
                       <td style={{ ...td, fontFamily: 'monospace', fontSize: '12px' }}>{h.ip}</td>
                       <td style={{ ...td, color: '#b71c1c' }}>{h.detail.replace('허니팟 접근 탐지: ', '')}</td>
                       <td style={{ ...td, color: '#aaa', fontSize: '11px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={h.user_agent ?? ''}>
+                        title={(h as any).user_agent ?? ''}>
                         {(h as any).user_agent ?? '—'}
                       </td>
                     </tr>

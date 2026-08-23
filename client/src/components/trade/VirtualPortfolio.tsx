@@ -4,7 +4,7 @@ import axios from 'axios'
 import { io, Socket } from 'socket.io-client'
 import PinPad from './PinPad'
 import { formatStockName } from '../../utils/formatStockName'
-
+import toast from 'react-hot-toast';
 import { API_BASE, SOCKET_URL } from '../../utils/api'
 
 interface Holding {
@@ -88,8 +88,8 @@ export default function VirtualPortfolio() {
   const [showResetPin, setShowResetPin] = useState(false)
   const [resetPinKey, setResetPinKey] = useState(0)
   const [resetError, setResetError] = useState('')
-  const [resetWorking, setResetWorking] = useState(false)
-
+  const [, setResetWorking] = useState(false)
+  
   const socketRef = useRef<Socket | null>(null)
 
   const fetchPortfolio = useCallback(async () => {
@@ -133,7 +133,7 @@ export default function VirtualPortfolio() {
   useEffect(() => {
     if (!portfolio || portfolio.holdings.length === 0) return
 
-    const socket = io(SOCKET_URL)
+    const socket = io(SOCKET_URL, { withCredentials: true })
     socketRef.current = socket
     const holdingCodes = new Set(portfolio.holdings.map(h => h.code))
 
@@ -167,8 +167,21 @@ export default function VirtualPortfolio() {
       })
     })
 
+    socket.on('order:filled', (data: any) => {
+      const sideText = data.side === 'buy' ? '매수' : '매도';
+      // 파일 상단에 import toast from 'react-hot-toast'; (또는 사용하는 알림 라이브러리) 필수
+      toast.success(`[체결 알림] ${data.stockCode} ${data.quantity}주 ${sideText} 완료`);
+      
+      if (fetchPortfolio) {
+        fetchPortfolio();
+      }
+    })
+
     return () => {
       portfolio.holdings.forEach(h => socket.emit('unsubscribe:stock', h.code))
+      
+      // 3. ★ 언마운트 시 체결 알림 끄기 추가 ★
+      socket.off('order:filled') 
       socket.disconnect()
     }
   }, [portfolio?.holdings.map(h => h.code).join(',')])
