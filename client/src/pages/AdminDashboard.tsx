@@ -53,6 +53,12 @@ type InferenceLog = {
   latency_ms: number | null; adapter: string | null; created_at: string
 }
 type InferenceSummary = { allowed24h: number; denied24h: number; denyByReason: { deny_reason: string | null; count: number }[] }
+type AdaptiveAuthStats = {
+  windowDays: number; total: number; note: string
+  byRequirement: Record<string, number>
+  byMode: Record<string, number>
+  averageScore: number | null
+}
 
 const g = fetch
 
@@ -69,6 +75,7 @@ export default function AdminDashboard() {
   const [blockedIPs, setBlockedIPs] = useState<string[]>([])
   const [inferenceLogs, setInferenceLogs] = useState<InferenceLog[]>([])
   const [inferenceSummary, setInferenceSummary] = useState<InferenceSummary | null>(null)
+  const [adaptive, setAdaptive] = useState<AdaptiveAuthStats | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -76,7 +83,7 @@ export default function AdminDashboard() {
     setLoading(true)
     try {
       const opt = { credentials: 'include' as const }
-      const [s, ct, cd, hp, la, bi, inf] = await Promise.all([
+      const [s, ct, cd, hp, la, bi, inf, ad] = await Promise.all([
         g(`${API}/stats`, opt).then(r => r.json()),
         g(`${API}/chart/by-type`, opt).then(r => r.json()),
         g(`${API}/chart/by-day`, opt).then(r => r.json()),
@@ -84,6 +91,7 @@ export default function AdminDashboard() {
         g(`${API}/locked-accounts`, opt).then(r => r.json()),
         g(`${API}/blocked-ips`, opt).then(r => r.json()),
         g(`${API}/inference-logs`, opt).then(r => r.json()),
+        g(`${API}/adaptive-auth?days=7`, opt).then(r => r.json()),
       ])
       setStats(s)
       setChartType(ct.map((r: ChartRow) => ({ ...r, label: TYPE_META[r.anomaly_type!]?.label ?? r.anomaly_type, count: Number(r.count) })))
@@ -93,6 +101,7 @@ export default function AdminDashboard() {
       setBlockedIPs(bi.ips ?? [])
       setInferenceLogs(Array.isArray(inf?.logs) ? inf.logs : [])
       setInferenceSummary(inf?.summary ?? null)
+      setAdaptive(ad && typeof ad.total === 'number' ? ad : null)
       setLastUpdated(new Date())
     } catch { /* ignore */ } finally {
       setLoading(false)
@@ -158,13 +167,19 @@ export default function AdminDashboard() {
 
   const totalPages = Math.ceil(logTotal / 20)
 
-  // 적응형 인증 보안 등급 분포 더미/집계 데이터 (도넛 차트용)
-  const adaptiveAuthData = [
-    { name: '일반 (NONE)', value: 45, color: '#3CB371' },
-    { name: '지갑서명 (WALLET)', value: 25, color: '#1e88e5' },
-    { name: 'PIN 인증', value: 20, color: '#8e24aa' },
-    { name: '이메일 OTP', value: 10, color: '#fb8c00' },
+  // 적응형 인증 등급 분포 — 서버 집계(GET /adaptive-auth)를 그대로 쓴다.
+  // 통과(NONE)는 애초에 기록 대상이 아니므로 항목에 넣지 않는다. 넣으면 없는 값을
+  // 0 으로 그려 "통과가 한 건도 없었다"는 잘못된 해석을 만든다.
+  // 현재 정책의 재인증 수단은 지갑 서명 하나다. PIN·이메일 OTP 는 정책 변경 이전
+  // 기록에만 존재하므로, 값이 0 이면 아래 filter 에서 자동으로 빠진다.
+  const ADAPTIVE_META: { key: string; name: string; color: string }[] = [
+    { key: 'WALLET',    name: '지갑서명 (WALLET)', color: '#1e88e5' },
+    { key: 'PIN',       name: 'PIN 인증 (구정책)',  color: '#8e24aa' },
+    { key: 'EMAIL_OTP', name: '이메일 OTP (구정책)', color: '#fb8c00' },
   ]
+  const adaptiveAuthData = ADAPTIVE_META
+    .map(m => ({ name: m.name, value: Number(adaptive?.byRequirement?.[m.key] ?? 0), color: m.color }))
+    .filter(d => d.value > 0)
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f4f6f9', padding: '32px 28px', fontFamily: 'sans-serif' }}>
@@ -249,7 +264,7 @@ export default function AdminDashboard() {
                       tickFormatter={(v: string) => v.slice(5)} />
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                     <Tooltip formatter={(v: any) => [`${v ?? 0}건`, '탐지 수']}
-                      labelFormatter={(l: string) => `날짜: ${l}`} />
+                      labelFormatter={(l: any) => `날짜: ${l}`} />
                     <Legend />
                     <Line type="monotone" dataKey="count" stroke="#e53935" strokeWidth={2}
                       dot={{ r: 4, fill: '#e53935' }} name="탐지 건수" />
@@ -261,18 +276,33 @@ export default function AdminDashboard() {
 
           {/* 적응형 인증 등급 분포 카드 (추가된 명세 통계) */}
           <div style={section}>
-            <p style={sectionTitle}>적응형 인증 등급 분포</p>
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={adaptiveAuthData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} innerRadius={35} label={{ fontSize: 10 }}>
-                  {adaptiveAuthData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v: any) => [`${v}%`, '비율']} />
-                <Legend iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
-              </PieChart>
-            </ResponsiveContainer>
+            <p style={sectionTitle}>
+              적응형 인증 등급 분포
+              <span style={{ fontSize: '11px', color: '#aaa', fontWeight: 400, marginLeft: '6px' }}>
+                최근 {adaptive?.windowDays ?? 7}일 · 통과(NONE) 제외
+              </span>
+            </p>
+            {adaptiveAuthData.length === 0 ? (
+              <p style={{ textAlign: 'center', color: '#ccc', padding: '40px 0' }}>재인증 판정 기록 없음</p>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={190}>
+                  <PieChart>
+                    <Pie data={adaptiveAuthData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} innerRadius={35} label={{ fontSize: 10 }}>
+                      {adaptiveAuthData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(v: any) => [`${v}건`, '판정 수']} />
+                    <Legend iconSize={8} wrapperStyle={{ fontSize: '11px' }} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <p style={{ fontSize: '11px', color: '#888', textAlign: 'center', margin: 0 }}>
+                  총 {adaptive?.total ?? 0}건 · 평균 위험점수 {adaptive?.averageScore ?? '—'} ·
+                  {' '}{(adaptive?.byMode?.['강제'] ?? 0) > 0 ? '강제 모드 포함' : '관측 모드'}
+                </p>
+              </>
+            )}
           </div>
 
         </div>

@@ -15,6 +15,7 @@ import honeypotRouter from './routes/security/honeypotRouter'
 import adminRouter from './routes/security/adminRouter'
 import { ipBlockMiddleware } from './middleware/security/ipBlockMiddleware'
 import virtualTradeRouter from './routes/trade/virtualTradeRouter'
+import tradePinRouter from './routes/trade/tradePinRouter'
 import realTradeRouter from './routes/trade/realTradeRouter'
 import surveyRouter from './routes/user/surveyRouter'
 import userRouter from './routes/user/userRouter'
@@ -65,6 +66,8 @@ app.use(honeypotRouter)     // 허니팟 경로 탐지
 app.use('/api/auth', authRouter)
 app.use('/api/admin/security', adminRouter)
 app.use('/api/test', contractTestRouter)
+// 거래 PIN 은 모의투자·실거래 공용이라 어느 한쪽 라우터에도 두지 않는다.
+app.use('/api/trade/pin', tradePinRouter)
 app.use('/api/trade/virtual', virtualTradeRouter)
 app.use('/api/trade/real', realTradeRouter)
 app.use('/api/survey', surveyRouter)

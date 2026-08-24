@@ -87,7 +87,9 @@ export async function getAdaptiveAuthStats(req: Request, res: Response): Promise
     detail: string; action: string; created_at: Date
   }>
 
-  const byRequirement: Record<string, number> = { PIN: 0, EMAIL_OTP: 0, WALLET: 0 }
+  // 재인증 수단은 지갑 서명 하나뿐이다. 과거 기록에 남아 있는 PIN·EMAIL_OTP 판정도
+  // 집계에서 누락되지 않도록 버킷을 유지한다(옛 로그의 재현성 보존).
+  const byRequirement: Record<string, number> = { WALLET: 0, PIN: 0, EMAIL_OTP: 0 }
   const byMode = { 관측: 0, 강제: 0 }
   let scoreSum = 0
   let scoreCount = 0

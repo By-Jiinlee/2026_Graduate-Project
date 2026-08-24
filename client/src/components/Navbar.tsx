@@ -22,10 +22,27 @@ export default function Navbar() {
   const [remaining, setRemaining] = useState(getSessionRemaining())
   const [showWarning, setShowWarning] = useState(false)
 
+  // 로그인 상태를 매 틱마다 쿠키에서 다시 읽는다.
+  //
+  // Navbar 는 <Routes> 바깥에 있어 라우트가 바뀌어도 다시 마운트되지 않는다. 그래서
+  // 마운트 시점에 한 번만 읽으면, 그 뒤 로그인에 성공해도 **전체 새로고침 전까지**
+  // 계속 비로그인('시작하기')으로 남는다. 지금까지 드러나지 않았던 이유는 로그인
+  // 성공 경로가 항상 window.location.href 로 전체 리로드를 했기 때문이고,
+  // SPA 라우팅(navigate)으로 넘어오는 경로가 하나라도 생기면 바로 재현된다.
+  //
+  // 이전 구현은 `if (!loggedIn) return` 으로 비로그인일 때 타이머 자체를 걸지 않아,
+  // 한 번 false 가 되면 다시 true 로 돌아올 경로가 아예 없었다.
   useEffect(() => {
-    if (!loggedIn) return
+    const tick = () => {
+      const isIn = checkLoggedIn()
+      setLoggedIn(isIn)
 
-    const interval = setInterval(() => {
+      if (!isIn) {
+        setRemaining(0)
+        setShowWarning(false)
+        return
+      }
+
       const r = getSessionRemaining()
       setRemaining(r)
 
@@ -37,6 +54,7 @@ export default function Navbar() {
 
       if (r <= 0) {
         setLoggedIn(false)
+        setShowWarning(false)
         localStorage.removeItem('loginTime')
         resetMode()
         document.cookie = 'accessToken=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
@@ -44,10 +62,12 @@ export default function Navbar() {
         document.cookie = 'isLoggedIn=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'
         navigate('/login')
       }
-    }, 1000)
+    }
 
+    tick()
+    const interval = setInterval(tick, 1000)
     return () => clearInterval(interval)
-  }, [loggedIn])
+  }, [navigate, resetMode])
 
   const handleLogout = async () => {
     await fetch(`${API_BASE}/api/auth/logout`, {

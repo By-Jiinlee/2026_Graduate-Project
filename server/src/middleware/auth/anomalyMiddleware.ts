@@ -154,7 +154,6 @@ export async function analyzeAfterLogin(
         const decision = decideAuthRequirement({
           isTrustedDevice: res.locals.isTrustedDevice === true,
           risk,
-          hasPin: collected.hasPin,
           // step2 와 같은 입력으로 판정해야 안내값과 실제 요구가 어긋나지 않는다.
           degraded: collected.degraded,
         })

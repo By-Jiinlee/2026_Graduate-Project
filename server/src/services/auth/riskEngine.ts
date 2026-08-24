@@ -48,8 +48,20 @@ export type RiskSignal =
   | 'ROUND_AMOUNT_PATTERN'
   | 'MULTI_ACCOUNT_SAME_IP'
 
-/** 요구 인증 강도 — 점수 구간이 이 값으로 매핑된다. */
-export type AuthRequirement = 'NONE' | 'PIN' | 'EMAIL_OTP' | 'WALLET'
+/**
+ * 요구 인증 강도.
+ *
+ * 재인증 수단은 온체인 지갑 서명 하나로 통일한다. PIN·이메일 코드 폴백을 두지 않는 이유:
+ *   · 이 서비스의 1차 인증 수단이 개인키 소유 증명이다. 계정 탈취가 의심되는 상황에서
+ *     그보다 약한 수단으로 내려가면 재인증의 의미가 없다.
+ *   · 이메일 코드는 메일 계정이 함께 털리면 무력하다. 자격증명 탈취를 의심해 올린 등급이
+ *     이미 뚫려 있을 수 있는 채널로 내려가는 셈이다.
+ *   · 폴백이 하나라도 있으면 "그 폴백을 고르는 것" 이 곧 가장 약한 경로가 된다.
+ *
+ * 위험 점수의 4구간(BAND)은 그대로 유지된다 — 기록·집계용 위험도 라벨이고,
+ * 여기서는 '재인증이 필요한가' 만 판단한다.
+ */
+export type AuthRequirement = 'NONE' | 'WALLET'
 
 export const RISK_POLICY = {
   /**
@@ -57,8 +69,8 @@ export const RISK_POLICY = {
    *
    * 기준: "이 신호 하나만으로 어느 등급까지 올라가야 하는가" 로 잡았다.
    *   · 계정 탈취가 이미 진행 중임을 강하게 시사 → 단독으로 WALLET(81+) 근처
-   *   · 탈취 가능성을 시사하지만 정상일 수도 → 단독으로 EMAIL_OTP(61+) 근처
-   *   · 맥락 정보 → 단독으로는 PIN(31+) 정도
+   *   · 탈취 가능성을 시사하지만 정상일 수도 → 단독으로 경계 구간(61+) 근처
+   *   · 맥락 정보 → 단독으로는 주의 구간(31+) 정도
    */
   WEIGHT: {
     // 단독으로도 최고 강도에 가까워야 하는 신호
@@ -96,12 +108,15 @@ export const RISK_POLICY = {
   OBSERVATIONAL: ['TRADE_FREQUENCY_SPIKE', 'ROUND_AMOUNT_PATTERN', 'MULTI_ACCOUNT_SAME_IP'] as const,
   OBSERVATIONAL_CAP: 20,
 
-  /** 점수 → 요구 인증 강도. 계획서의 4구간을 그대로 따른다. */
+  /**
+   * 점수 → 위험 구간. 계획서의 4구간을 그대로 유지한다(라벨은 집계·감사용).
+   * 다만 요구하는 재인증 **수단**은 통과(NONE)냐 지갑 서명(WALLET)이냐 둘뿐이다.
+   */
   BAND: [
     { max: 30, requirement: 'NONE' as AuthRequirement, label: '통과' },
-    { max: 60, requirement: 'PIN' as AuthRequirement, label: 'PIN 확인' },
-    { max: 80, requirement: 'EMAIL_OTP' as AuthRequirement, label: '이메일 인증코드' },
-    { max: 100, requirement: 'WALLET' as AuthRequirement, label: '지갑 서명' },
+    { max: 60, requirement: 'WALLET' as AuthRequirement, label: '주의 — 지갑 서명' },
+    { max: 80, requirement: 'WALLET' as AuthRequirement, label: '경계 — 지갑 서명' },
+    { max: 100, requirement: 'WALLET' as AuthRequirement, label: '심각 — 지갑 서명' },
   ],
 } as const
 
@@ -188,32 +203,18 @@ export function assessRisk(signals: readonly RiskSignal[]): RiskAssessment {
  * 신뢰 기기가 아니면 위험 점수와 무관하게 지갑 서명을 요구한다 — 기존 정책을 그대로
  * 유지하기 위해서다. 적응형 판정은 **신뢰 기기 구간에만** 적용한다. 그 구간이 지금까지
  * 무조건 통과였던 사각지대이므로, 이 엔진을 붙여도 기존보다 약해지는 경로가 없다.
+ *
+ * 결과는 통과(NONE) 아니면 지갑 서명(WALLET) 둘뿐이다 — 폴백 수단을 두지 않는다.
  */
 export function decideAuthRequirement(params: {
   isTrustedDevice: boolean
   risk: RiskAssessment
   /**
-   * 거래 PIN 을 설정한 사용자인가.
-   *
-   * PIN 미설정자에게 PIN 을 요구하면 `verifyPin` 이 "PIN이 설정되지 않았습니다"로
-   * 거절해 **로그인이 막히고, 로그인을 못 하니 PIN 설정도 못 하는** 잠금 상태가 된다.
-   * 그렇다고 통과시키면 "PIN 을 만들지 않는 것"이 곧 재인증 우회가 되므로,
-   * 한 단계 위인 이메일 인증코드로 승격한다(강도 유지).
-   *
-   * 로그인 도중에 PIN 을 새로 만들게 하는 방식은 채택하지 않았다 — 재인증이 걸린
-   * 세션은 아직 본인이 증명되지 않은 상태이므로, 그 세션이 챌린지 대상 크리덴셜을
-   * 스스로 등록하게 하면 재인증이 무력화된다. PIN 설정 유도는 로그인 성공 후에 한다.
-   *
-   * 호출자가 조회에 실패했다면 false 를 넘긴다 — 잠기는 쪽보다 한 단계 강한 인증을
-   * 요구하는 쪽이 안전하다.
-   */
-  hasPin: boolean
-  /**
    * 신호 수집이 부분 실패했는가(collectRiskSignals 의 degraded).
    *
    * 이 플래그가 없으면 **DB 조회를 죽이는 것이 곧 인증 우회**가 된다. 신호를 못 읽으면
    * 점수가 0 이 되고, 신뢰 기기 구간에서는 그대로 통과(NONE)이기 때문이다.
-   * 그래서 수집이 불완전하면 최소 PIN 으로 올려 fail-safe 를 만든다.
+   * 그래서 수집이 불완전하면 지갑 서명을 요구해 fail-safe 를 만든다.
    */
   degraded?: boolean
 }): { requirement: AuthRequirement; reason: string } {
@@ -224,33 +225,28 @@ export function decideAuthRequirement(params: {
     }
   }
 
-  const base =
-    params.degraded && STRENGTH_ORDER[params.risk.requirement] < STRENGTH_ORDER.PIN
-      ? {
-          requirement: 'PIN' as AuthRequirement,
-          reason: `신뢰 기기 — 위험 신호 수집 실패로 최소 등급(PIN) 적용. 원 판정: ${params.risk.detail}`,
-        }
-      : {
-          requirement: params.risk.requirement,
-          reason: `신뢰 기기 — ${params.risk.detail}`,
-        }
-
-  if (base.requirement === 'PIN' && !params.hasPin) {
+  // 신호 수집이 실패했으면 점수를 믿을 수 없다 — 통과시키지 않는다.
+  if (params.degraded) {
     return {
-      requirement: 'EMAIL_OTP',
-      reason: `${base.reason} / PIN 미설정으로 이메일 인증코드 승격`,
+      requirement: 'WALLET',
+      reason: `신뢰 기기 — 위험 신호 수집 실패로 지갑 서명 요구. 원 판정: ${params.risk.detail}`,
     }
   }
 
-  return base
+  if (params.risk.requirement === 'NONE') {
+    return { requirement: 'NONE', reason: `신뢰 기기 — ${params.risk.detail}` }
+  }
+
+  return {
+    requirement: 'WALLET',
+    reason: `신뢰 기기 — ${params.risk.detail} / 재인증: 온체인 지갑 서명(${params.risk.bandLabel})`,
+  }
 }
 
-/** 인증 강도 순서 — 크면 강하다. 등급 비교·승격에 쓴다. */
+/** 인증 강도 순서 — 크면 강하다. 등급 비교에 쓴다. */
 export const STRENGTH_ORDER: Record<AuthRequirement, number> = {
   NONE: 0,
-  PIN: 1,
-  EMAIL_OTP: 2,
-  WALLET: 3,
+  WALLET: 1,
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -287,11 +283,6 @@ export interface CollectedSignals {
   signals: RiskSignal[]
   /** 수집 중 일부 조회가 실패했는가 — true 면 점수가 과소평가됐을 수 있다 */
   degraded: boolean
-  /**
-   * 거래 PIN 설정 여부 — `decideAuthRequirement` 의 hasPin 으로 그대로 넘긴다.
-   * 조회 실패·사용자 미상이면 false 다(잠김 방지 쪽으로 기운다).
-   */
-  hasPin: boolean
 }
 
 /**
@@ -308,7 +299,6 @@ export async function collectRiskSignals(params: {
 }): Promise<CollectedSignals> {
   const found = new Set<RiskSignal>()
   let degraded = false
-  let hasPin = false
 
   // 1) 이번 로그인에서 방금 탐지된 것 — DB 를 거치지 않고 바로 반영
   for (const a of params.loginAnomalies ?? []) {
@@ -358,22 +348,8 @@ export async function collectRiskSignals(params: {
     }
   }
 
-  // 5) 거래 PIN 설정 여부 — 위험 신호가 아니라 '요구 가능한 인증 수단'의 가용성이다.
-  //    판정부(decideAuthRequirement)를 순수 함수로 유지하기 위해 여기서 함께 읽어 넘긴다.
-  if (params.userId != null) {
-    try {
-      const { default: User } = await import('../../models/user/User')
-      const row = (await User.findByPk(params.userId, {
-        attributes: ['pin_hash'],
-        raw: true,
-      })) as unknown as { pin_hash: string | null } | null
-      hasPin = !!row?.pin_hash
-    } catch (err) {
-      // 조회 실패는 degraded 로 올리지 않는다 — 위험 점수의 과소평가가 아니라
-      // 인증 수단 가용성의 문제이고, hasPin=false 가 이미 안전한 쪽(승격)이다.
-      console.error('[RiskEngine] PIN 설정 여부 조회 실패:', err)
-    }
-  }
+  // 재인증 수단이 지갑 서명 하나뿐이라 PIN 설정 여부는 더 이상 조회하지 않는다.
+  // (지갑은 전 계정이 가입 시점에 보유하므로 '수단 가용성' 을 따질 필요가 없다)
 
-  return { signals: [...found], degraded, hasPin }
+  return { signals: [...found], degraded }
 }

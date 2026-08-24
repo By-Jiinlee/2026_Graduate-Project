@@ -15,9 +15,24 @@ import Login from './pages/Login'
 import StockDetail from './pages/StockDetail'
 // 💡 앞서 만든 설문 페이지 Import (경로가 다르면 수정해주세요)
 import Survey from './pages/Survey' 
+import AdminDashboard from './pages/AdminDashboard'
 import { Toaster } from 'react-hot-toast'
 
 const isLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
+
+// 관리자 전용 화면 가드 — 화면 노출만 막는 1차 방어이고, 실제 권한 검증은
+// 서버의 isAdmin 미들웨어가 담당한다(localStorage 는 사용자가 조작할 수 있음).
+const isAdmin = () => {
+  try {
+    const user = JSON.parse(localStorage.getItem('upTick_user') || '{}')
+    return user?.role === 'admin'
+  } catch { return false }
+}
+
+const AdminRoute = ({ children }: { children: React.ReactNode }) => {
+  if (!isLoggedIn() || !isAdmin()) return <Navigate to="/" replace />
+  return <>{children}</>
+}
 
 // 1. 기존 로그인 체크 가드
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -118,6 +133,9 @@ function App() {
         <Route path="/support" element={<ProtectedRoute><SurveyGuard><Support /></SurveyGuard></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute><SurveyGuard><Events /></SurveyGuard></ProtectedRoute>} />
         <Route path="/mypage" element={<ProtectedRoute><SurveyGuard><MyPage /></SurveyGuard></ProtectedRoute>} />
+
+        {/* 관리자 보안 대시보드 */}
+        <Route path="/admin/security" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       </Routes>
     </BrowserRouter>
   )

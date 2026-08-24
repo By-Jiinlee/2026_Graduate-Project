@@ -11,7 +11,6 @@ import {
 } from '../../services/auth/trustedDeviceService'
 import { assessRisk, collectRiskSignals, decideAuthRequirement } from '../../services/auth/riskEngine'
 import { recordAdaptiveDecision } from '../../services/auth/anomalyService'
-import { verifyPin } from '../../services/trade/virtualTradeService'
 import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
 import { issueSessionSecret, revokeSessionSecret } from '../../services/auth/hmacService'
 import Wallet from '../../models/user/Wallet'
@@ -191,31 +190,6 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
   }
 }
 
-/**
- * 적응형 인증(H) — 로그인 재인증용 이메일 인증코드 요청.
- *
- * 응답을 항상 동일하게 돌려준다. 성공/실패를 구분해 주면 임의 userId 를 넣어보는 것만으로
- * 계정 존재 여부를 알 수 있다(계정 열거). 실제 발급 여부는 소유자만 메일함에서 확인한다.
- *
- * 남용 방지는 sendStepUpCode 내부의 일 5회 / 1분 쿨타임에 위임한다.
- */
-export const requestStepUpEmailCode = async (req: Request, res: Response) => {
-  const { userId } = req.body
-  const generic = { message: '등록된 이메일로 인증코드를 보냈습니다. 5분 안에 입력해주세요.' }
-
-  if (!userId || !Number.isInteger(Number(userId))) return res.status(200).json(generic)
-
-  try {
-    const user = await User.findByPk(Number(userId))
-    if (user) await authService.sendStepUpCode(user.email)
-  } catch (err) {
-    // 한도 초과·발송 실패도 동일 응답으로 감춘다. 코드가 없으면 step2 가 거부하므로
-    // 이 경로가 인증을 약화시키지 않는다.
-    console.warn('[AdaptiveAuth] step-up 코드 발송 실패:', (err as Error).message)
-  }
-  return res.status(200).json(generic)
-}
-
 // 2단계: 지갑 서명 검증 → JWT 발급
 export const loginStep2 = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -245,7 +219,6 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
     const decision = decideAuthRequirement({
       isTrustedDevice,
       risk,
-      hasPin: collected.hasPin,
       degraded: collected.degraded,
     })
 
@@ -265,14 +238,17 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     // ── 단계적 적용 게이트 ────────────────────────────────────────
     //
-    // PIN·OTP 입력 화면이 프론트에 아직 없다. 강제를 바로 켜면 "신뢰 기기 + 위험 신호"
-    // 사용자가 400 을 받고 로그인 자체를 못 한다(예: 해외 접속 40점 → PIN 요구).
-    // 그래서 기본값은 '판정만 하고 강제하지 않음' 이다.
+    // 프론트 재인증 화면이 붙었으므로 기본값을 '강제' 로 둔다. 관측만 하려면
+    // ADAPTIVE_AUTH_ENFORCE=false 로 명시적으로 끈다.
     //
-    // 중요: 강제를 꺼도 **기존 정책은 그대로 강제한다.** 미신뢰 기기의 지갑 서명 요구는
-    // 게이트와 무관하게 항상 적용되므로, 이 플래그가 꺼져 있어도 기존보다 약해지지 않는다.
-    // 프론트 분기가 준비되면 ADAPTIVE_AUTH_ENFORCE=true 로 켠다.
-    const enforceAdaptive = process.env.ADAPTIVE_AUTH_ENFORCE === 'true'
+    // 기본값이 관측일 때 실제로 발생했던 문제: 프론트는 step1 의 requiredAuth 를 보고
+    // 이메일 코드 입력 화면을 띄우는데 서버는 코드를 검증하지 않아, **아무 코드나 넣어도
+    // 로그인이 되는 '인증하는 척하는 화면'** 이 됐다. 안내값과 강제 여부가 갈리면
+    // 언제든 같은 종류의 괴리가 생기므로 기본을 강제로 맞춘다.
+    //
+    // 강제를 꺼도 **기존 정책은 그대로 강제한다.** 미신뢰 기기의 지갑 서명 요구는
+    // 게이트와 무관하게 항상 적용되므로, 꺼져 있어도 기존보다 약해지지 않는다.
+    const enforceAdaptive = process.env.ADAPTIVE_AUTH_ENFORCE !== 'false'
 
     if (!isTrustedDevice && !signature) {
       // 기존 정책 — 게이트와 무관하게 항상 적용
@@ -296,28 +272,6 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     if (enforceAdaptive && decision.requirement === 'WALLET' && !signature) {
       return denyStepUp('지갑 서명이 필요합니다', 'WALLET_REQUIRED')
-    }
-
-    if (enforceAdaptive && decision.requirement === 'EMAIL_OTP') {
-      const { emailCode } = req.body
-      if (!emailCode) return denyStepUp('이메일 인증코드가 필요합니다', 'EMAIL_OTP_REQUIRED')
-      const owner = await User.findByPk(userId)
-      if (!owner) return denyStepUp('인증에 실패했습니다', 'EMAIL_OTP_REQUIRED')
-      try {
-        await authService.verifyEmailCode(owner.email, emailCode)
-      } catch (e: any) {
-        return denyStepUp(e.message ?? '인증코드가 올바르지 않습니다', 'EMAIL_OTP_INVALID')
-      }
-    }
-
-    if (enforceAdaptive && decision.requirement === 'PIN') {
-      const { pin } = req.body
-      if (!pin) return denyStepUp('PIN 입력이 필요합니다', 'PIN_REQUIRED')
-      try {
-        await verifyPin(userId, pin)
-      } catch (e: any) {
-        return denyStepUp(e.message ?? 'PIN 이 올바르지 않습니다', 'PIN_INVALID')
-      }
     }
 
 

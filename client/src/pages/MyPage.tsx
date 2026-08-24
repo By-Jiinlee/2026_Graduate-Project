@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useTradeModeStore } from '../store/tradeModeStore'
 import { useProfileStore } from '../store/profileStore'
 import VirtualPortfolio from '../components/trade/VirtualPortfolio'
+import PinPad from '../components/trade/PinPad'
 
 import { API_BASE } from '../utils/api'
 import { signedFetch } from '../utils/tradeSigning'
@@ -89,10 +90,13 @@ function VirtualAccountSection() {
 function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }) {
   const [status, setStatus] = useState<'loading' | 'registered' | 'not_registered'>('loading')
   const [maskedCano, setMaskedCano] = useState('')
-  const [form, setForm] = useState({ appKey: '', appSecret: '', cano: '', acntPrdtCd: '01', pin: '' })
+  const [form, setForm] = useState({ appKey: '', appSecret: '', cano: '', acntPrdtCd: '01' })
   const [showForm, setShowForm] = useState(false)
-  const [showRemovePin, setShowRemovePin] = useState(false)
-  const [removePin, setRemovePin] = useState('')
+
+  // 계좌 등록·해제의 PIN 도 화면 키패드로 받는다 — 모의투자·PIN 설정과 같은 경로다.
+  // 'register' 는 KIS 정보 입력을 마친 뒤, 'remove' 는 해제 버튼을 누른 뒤 뜬다.
+  const [pinFlow, setPinFlow] = useState<'register' | 'remove' | null>(null)
+  const [pinPadKey, setPinPadKey] = useState(0)
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -113,12 +117,20 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
 
   useEffect(() => { fetchStatus() }, [])
 
-  const handleRegister = async () => {
-    const { appKey, appSecret, cano, acntPrdtCd, pin } = form
-    if (!appKey || !appSecret || !cano || !acntPrdtCd || !pin) {
+  // KIS 정보만 먼저 검증하고, PIN 은 키패드로 따로 받는다.
+  const startRegister = () => {
+    const { appKey, appSecret, cano, acntPrdtCd } = form
+    if (!appKey || !appSecret || !cano || !acntPrdtCd) {
       setMsg({ text: '모든 항목을 입력해주세요', ok: false })
       return
     }
+    setMsg(null)
+    setPinFlow('register')
+    setPinPadKey(k => k + 1)
+  }
+
+  const handleRegister = async (pin: string) => {
+    const { appKey, appSecret, cano, acntPrdtCd } = form
     setLoading(true)
     setMsg(null)
     try {
@@ -131,36 +143,35 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
       if (!res.ok) throw new Error(data.message)
       setMsg({ text: '실거래 계좌가 등록되었습니다', ok: true })
       setShowForm(false)
-      setForm({ appKey: '', appSecret: '', cano: '', acntPrdtCd: '01', pin: '' })
+      setForm({ appKey: '', appSecret: '', cano: '', acntPrdtCd: '01' })
       fetchStatus()
       onAccountChange()
     } catch (e: any) {
       setMsg({ text: e.message, ok: false })
     } finally {
+      setPinFlow(null)
       setLoading(false)
     }
   }
 
-  const handleRemove = async () => {
-    if (!removePin) { setMsg({ text: 'PIN을 입력해주세요', ok: false }); return }
+  const handleRemove = async (pin: string) => {
     setLoading(true)
     setMsg(null)
     try {
       const res = await signedFetch(`${API_BASE}/api/trade/real/account`, {
         method: 'DELETE',
         credentials: 'include',
-        body: JSON.stringify({ pin: removePin }),
+        body: JSON.stringify({ pin }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
       setMsg({ text: '계좌 연동이 해제되었습니다', ok: true })
-      setShowRemovePin(false)
-      setRemovePin('')
       fetchStatus()
       onAccountChange()
     } catch (e: any) {
       setMsg({ text: e.message, ok: false })
     } finally {
+      setPinFlow(null)
       setLoading(false)
     }
   }
@@ -179,39 +190,22 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
         {msg && (
           <p className={`text-sm font-semibold text-center ${msg.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg.text}</p>
         )}
-        {!showRemovePin ? (
-          <button
-            onClick={() => { setShowRemovePin(true); setMsg(null) }}
-            className="w-full py-2.5 border-2 border-red-200 text-red-500 font-bold rounded-xl hover:bg-red-50 transition text-sm"
-          >
-            계좌 연동 해제
-          </button>
-        ) : (
-          <div className="space-y-2">
-            <input
-              type="password"
-              value={removePin}
-              onChange={e => setRemovePin(e.target.value)}
-              placeholder="PIN 6자리 입력"
-              maxLength={6}
-              className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-xl text-sm text-center tracking-widest outline-none focus:border-red-400"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={handleRemove}
-                disabled={loading}
-                className="flex-1 py-2.5 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition text-sm disabled:opacity-50"
-              >
-                {loading ? '처리 중...' : '해제 확인'}
-              </button>
-              <button
-                onClick={() => { setShowRemovePin(false); setRemovePin('') }}
-                className="flex-1 py-2.5 border-2 border-gray-200 text-gray-500 font-bold rounded-xl hover:bg-gray-50 transition text-sm"
-              >
-                취소
-              </button>
-            </div>
-          </div>
+        <button
+          onClick={() => { setMsg(null); setPinFlow('remove'); setPinPadKey(k => k + 1) }}
+          disabled={loading}
+          className="w-full py-2.5 border-2 border-red-200 text-red-500 font-bold rounded-xl hover:bg-red-50 transition text-sm disabled:opacity-50"
+        >
+          {loading ? '처리 중...' : '계좌 연동 해제'}
+        </button>
+
+        {pinFlow === 'remove' && (
+          <PinPad
+            key={pinPadKey}
+            title="계좌 연동 해제"
+            subtitle="본인 확인을 위해 거래 PIN을 입력하세요"
+            onConfirm={handleRemove}
+            onCancel={() => setPinFlow(null)}
+          />
         )}
       </div>
     )
@@ -263,22 +257,16 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
             </div>
           ))}
           <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">본인 확인 PIN</label>
-            <input
-              type="password"
-              value={form.pin}
-              onChange={e => setForm(f => ({ ...f, pin: e.target.value }))}
-              placeholder="PIN 6자리"
-              maxLength={6}
-              className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm text-center tracking-widest outline-none focus:border-orange-400"
-            />
+            <p className="text-xs text-gray-400 leading-relaxed">
+              🔒 등록 버튼을 누르면 본인 확인을 위한 거래 PIN 입력창이 열립니다.
+            </p>
           </div>
           {msg && (
             <p className={`text-sm font-semibold text-center ${msg.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg.text}</p>
           )}
           <div className="flex gap-2">
             <button
-              onClick={handleRegister}
+              onClick={startRegister}
               disabled={loading}
               className="flex-1 py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition text-sm disabled:opacity-50"
             >
@@ -292,6 +280,16 @@ function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }
             </button>
           </div>
         </div>
+      )}
+
+      {pinFlow === 'register' && (
+        <PinPad
+          key={pinPadKey}
+          title="실거래 계좌 등록"
+          subtitle="본인 확인을 위해 거래 PIN을 입력하세요"
+          onConfirm={handleRegister}
+          onCancel={() => setPinFlow(null)}
+        />
       )}
     </div>
   )

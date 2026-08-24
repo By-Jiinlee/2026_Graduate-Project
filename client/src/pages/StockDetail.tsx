@@ -35,13 +35,28 @@ type ChartMode = 'line' | 'candle'
 type LinePeriod = '1d' | '1w' | '3m' | '1y' | '3y' | '5y' | '10y'
 type CandleType = 'minute' | 'day' | 'week' | 'month'
 
-// AI 예측 데이터 인터페이스
+// AI 예측 — 서버 응답 계약 그대로다(POST /api/ai/predict).
+//
+// 모델은 상승/하락 이진 분류와 그 방향의 확률만 낸다. 목표주가나 매수/매도 의견 같은
+// 필드는 존재하지 않으므로 화면에서도 만들어 쓰지 않는다.
+// confidence 는 0~1 이며 5%p 격자로 양자화되어 내려온다(원 확률 복원 방지).
+type AiHorizon = '1d' | '1w' | '1m' | '1y'
+
 interface AiPrediction {
-    signal: 'BUY' | 'SELL' | 'HOLD'
-    confidence: number
-    targetPrice: number
-    reason: string
+    recommended: boolean
+    direction?: 'UP' | 'DOWN'
+    confidence?: number
+    predictDate?: string
+    message?: string
+    disclaimer: string
 }
+
+const AI_HORIZONS: { key: AiHorizon; label: string }[] = [
+    { key: '1d', label: '1일' },
+    { key: '1w', label: '1주' },
+    { key: '1m', label: '1개월' },
+    { key: '1y', label: '1년' },
+]
 
 const LINE_PERIODS: { key: LinePeriod; label: string; days: number }[] = [
     { key: '1d',  label: '1일',   days: 0    },
@@ -99,7 +114,10 @@ export default function StockDetail() {
     
     // 캐시 저장소 (KIS 히스토리 및 AI 예측 데이터 중복 호출 방지)
     const kisCache = useRef<Map<string, CandleBar[]>>(new Map())
-    const aiCache = useRef<Map<string, AiPrediction>>(new Map())
+    // 캐시 키는 예측 구간(horizon)이다. 예전에는 차트 탭(cacheKey)을 키로 썼는데,
+    // 차트 기간과 예측 구간은 아무 관계가 없어서 탭을 옮길 때마다 같은 예측을
+    // 다시 요청했다 — 서버 호출 한도(inferenceGuard)를 그냥 태우는 구조였다.
+    const aiCache = useRef<Map<AiHorizon, AiPrediction>>(new Map())
 
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(false)
@@ -111,9 +129,11 @@ export default function StockDetail() {
     const [linePeriod, setLinePeriod] = useState<LinePeriod>('1y')
     const [candleType, setCandleType] = useState<CandleType>('day')
 
-    // AI 예측 상태 추가
+    // AI 예측 상태
+    const [aiHorizon, setAiHorizon] = useState<AiHorizon>('1w')
     const [aiPrediction, setAiPrediction] = useState<AiPrediction | null>(null)
     const [aiLoading, setAiLoading] = useState(false)
+    const [aiError, setAiError] = useState('')
 
     // 초기 데이터: 종목 기본정보만 로드
     useEffect(() => {
@@ -206,40 +226,61 @@ export default function StockDetail() {
                 .finally(() => setHistLoading(false))
         }
 
-        // 2. AI 예측 데이터 캐시 처리 (429 에러 방지를 위한 탭별 캐싱 적용)
-        if (aiCache.current.has(cacheKey)) {
-            setAiPrediction(aiCache.current.get(cacheKey)!)
-        } else {
-            setAiLoading(true)
-            // 백엔드 AI 예측 API 호출 (엔드포인트 예시, 필요시 조정)
-            axios.get(`${API_BASE}/api/market/stock-prices/${stockId}/ai-prediction`, {
-                params: { period: cacheKey }
-            })
-                .then(res => {
-                    const prediction = res.data.prediction ?? {
-                        signal: 'HOLD',
-                        confidence: 72,
-                        targetPrice: livePrice ? livePrice.price * 1.05 : 0,
-                        reason: '단기 이평선 수렴 구간으로 보합세가 예상됩니다.'
-                    }
-                    aiCache.current.set(cacheKey!, prediction)
-                    setAiPrediction(prediction)
-                })
-                .catch(() => {
-                    // API가 아직 구현되지 않았거나 실패 시 안전한 더미 데이터 폴백
-                    const fallback: AiPrediction = {
-                        signal: 'BUY',
-                        confidence: 85,
-                        targetPrice: livePrice ? Math.round(livePrice.price * 1.08) : 50000,
-                        reason: '거래량 유입과 함께 골든크로스 신호가 포착되었습니다.'
-                    }
-                    aiCache.current.set(cacheKey!, fallback)
-                    setAiPrediction(fallback)
-                })
-                .finally(() => setAiLoading(false))
+    }, [chartMode, linePeriod, candleType, stockId])
+
+    // 종목이 바뀌면 예측 캐시를 버린다 — 캐시 키가 horizon 뿐이라 종목별로 격리해야 한다.
+    useEffect(() => {
+        aiCache.current.clear()
+        setAiPrediction(null)
+        setAiError('')
+    }, [stockId])
+
+    // AI 예측 조회 — 실제 엔드포인트(POST /api/ai/predict).
+    //
+    // 인증(JWT)과 추론 가드(입력 스키마·예측 대상 여부·호출 한도)를 통과해야 응답이 온다.
+    // 실패했을 때 임의의 값을 지어내지 않는다 — 투자 화면에서 근거 없는 방향·확신도를
+    // 보여주는 건 그 자체로 사고다. 사유를 그대로 노출하고 카드는 비워 둔다.
+    useEffect(() => {
+        if (!info?.code) return
+
+        const cached = aiCache.current.get(aiHorizon)
+        if (cached) {
+            setAiPrediction(cached)
+            setAiError('')
+            return
         }
 
-    }, [chartMode, linePeriod, candleType, stockId])
+        let cancelled = false
+        setAiLoading(true)
+        setAiError('')
+
+        axios.post(
+            `${API_BASE}/api/ai/predict`,
+            { code: info.code, horizon: aiHorizon },   // 서버가 이 두 필드 외에는 거부한다
+            { withCredentials: true },
+        )
+            .then(res => {
+                if (cancelled) return
+                const data = res.data as AiPrediction
+                aiCache.current.set(aiHorizon, data)
+                setAiPrediction(data)
+            })
+            .catch(err => {
+                if (cancelled) return
+                setAiPrediction(null)
+                const status = err?.response?.status
+                if (status === 429) {
+                    setAiError('예측 조회 한도를 초과했습니다. 잠시 후 다시 시도해주세요.')
+                } else if (status === 401) {
+                    setAiError('로그인이 필요한 기능입니다.')
+                } else {
+                    setAiError(err?.response?.data?.message ?? '예측을 불러오지 못했습니다.')
+                }
+            })
+            .finally(() => { if (!cancelled) setAiLoading(false) })
+
+        return () => { cancelled = true }
+    }, [info?.code, aiHorizon])
 
     // 차트에 그릴 데이터 계산
     const { chartItems, isMinute, isLine } = useMemo(() => {
@@ -559,35 +600,61 @@ export default function StockDetail() {
                                 <span style={{ fontSize: '16px' }}>🤖</span>
                                 <h3 style={{ fontSize: '15px', fontWeight: 'bold', color: '#0f172a', margin: 0 }}>UpTick AI 스마트 예측</h3>
                             </div>
-                            <span style={{ fontSize: '11px', color: '#64748b', backgroundColor: '#f1f5f9', padding: '2px 8px', borderRadius: '999px', fontWeight: '600' }}>
-                                탭별 AI 캐시 적용
-                            </span>
+                            {/* 예측 구간 선택 — 차트 기간과 무관하다 */}
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                                {AI_HORIZONS.map(h => (
+                                    <button
+                                        key={h.key}
+                                        onClick={() => setAiHorizon(h.key)}
+                                        style={{
+                                            padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: '700',
+                                            border: '1px solid ' + (aiHorizon === h.key ? '#0f172a' : '#e2e8f0'),
+                                            backgroundColor: aiHorizon === h.key ? '#0f172a' : '#fff',
+                                            color: aiHorizon === h.key ? '#fff' : '#64748b',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
+                                        {h.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
                         {aiLoading ? (
-                            <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px 0' }}>AI가 시장 데이터를 분석 중입니다...</div>
-                        ) : aiPrediction ? (
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <div style={{ 
-                                        padding: '8px 14px', 
-                                        borderRadius: '10px', 
-                                        fontWeight: '800', 
-                                        fontSize: '14px',
-                                        backgroundColor: aiPrediction.signal === 'BUY' ? '#fee2e2' : aiPrediction.signal === 'SELL' ? '#dbeafe' : '#f1f5f9',
-                                        color: aiPrediction.signal === 'BUY' ? '#ef4444' : aiPrediction.signal === 'SELL' ? '#3b82f6' : '#64748b'
+                            <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px 0' }}>예측을 불러오는 중입니다...</div>
+                        ) : aiError ? (
+                            <div style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px 0' }}>{aiError}</div>
+                        ) : aiPrediction?.recommended === false ? (
+                            <div style={{ padding: '16px 0' }}>
+                                <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 6px 0', fontWeight: '600' }}>
+                                    {aiPrediction.message ?? '확신도가 낮아 예측을 제공하지 않습니다.'}
+                                </p>
+                                <p style={{ fontSize: '11px', color: '#cbd5e1', margin: 0 }}>{aiPrediction.disclaimer}</p>
+                            </div>
+                        ) : aiPrediction?.recommended ? (
+                            <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                                    <div style={{
+                                        padding: '8px 14px', borderRadius: '10px', fontWeight: '800', fontSize: '14px',
+                                        backgroundColor: aiPrediction.direction === 'UP' ? '#fee2e2' : '#dbeafe',
+                                        color: aiPrediction.direction === 'UP' ? '#ef4444' : '#3b82f6',
                                     }}>
-                                        {aiPrediction.signal === 'BUY' ? '🔥 강력 매수' : aiPrediction.signal === 'SELL' ? '⚠️ 하락 주의' : '🛡️ 판단 보류'}
+                                        {aiPrediction.direction === 'UP' ? '▲ 상승 예상' : '▼ 하락 예상'}
                                     </div>
                                     <div>
-                                        <p style={{ fontSize: '13px', color: '#334155', fontWeight: '600', margin: '0 0 4px 0' }}>{aiPrediction.reason}</p>
-                                        <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>예측 신뢰도: <strong style={{ color: '#0f172a' }}>{aiPrediction.confidence}%</strong></p>
+                                        <p style={{ fontSize: '13px', color: '#334155', fontWeight: '600', margin: '0 0 4px 0' }}>
+                                            확신도{' '}
+                                            <strong style={{ color: '#0f172a' }}>
+                                                {aiPrediction.confidence != null ? `${Math.round(aiPrediction.confidence * 100)}%` : '—'}
+                                            </strong>
+                                        </p>
+                                        <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>
+                                            예측 구간 {AI_HORIZONS.find(h => h.key === aiHorizon)?.label}
+                                            {aiPrediction.predictDate ? ` · 기준일 ${aiPrediction.predictDate}` : ''}
+                                        </p>
                                     </div>
                                 </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <span style={{ fontSize: '12px', color: '#94a3b8', display: 'block' }}>AI 목표 예상가</span>
-                                    <span style={{ fontSize: '16px', fontWeight: '800', color: '#0f172a' }}>₩{aiPrediction.targetPrice.toLocaleString()}</span>
-                                </div>
+                                <p style={{ fontSize: '11px', color: '#cbd5e1', margin: '12px 0 0 0' }}>{aiPrediction.disclaimer}</p>
                             </div>
                         ) : null}
                     </div>

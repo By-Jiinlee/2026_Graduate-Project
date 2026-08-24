@@ -19,36 +19,6 @@ const rejectByAssessment = (res: Response, a: TradeAssessment): boolean => {
 
 // ─── PIN 설정 ─────────────────────────────────────────────────
 
-export const setPin = async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user.id
-    const { pin } = req.body
-    if (!pin) return res.status(400).json({ message: 'PIN을 입력해주세요' })
-
-    await tradeService.setPin(userId, pin)
-    res.json({ message: 'PIN이 설정되었습니다' })
-  } catch (err: any) {
-    res.status(400).json({ message: err.message })
-  }
-}
-
-// ─── PIN 변경 ─────────────────────────────────────────────────
-
-export const changePin = async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user.id
-    const { oldPin, newPin } = req.body
-    if (!oldPin || !newPin) return res.status(400).json({ message: '현재 PIN과 새 PIN을 입력해주세요' })
-
-    await tradeService.changePin(userId, oldPin, newPin)
-    res.json({ message: 'PIN이 변경되었습니다' })
-  } catch (err: any) {
-    res.status(400).json({ message: err.message })
-  }
-}
-
-// ─── 계좌 개설 ────────────────────────────────────────────────
-
 export const openAccount = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
