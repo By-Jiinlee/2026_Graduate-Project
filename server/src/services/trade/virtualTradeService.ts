@@ -465,6 +465,10 @@ export const sellStock = async (params: SellParams) => {
 // ─── 미체결 주문 조회 ─────────────────────────────────────────
 
 export const getPendingOrders = async (userId: number) => {
+  if (userId === 33) {
+    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 미체결 주문 조회 감지`)
+    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-04)')
+  }
   return sequelize.query<{
     id: number
     side: string
@@ -489,6 +493,10 @@ export const getPendingOrders = async (userId: number) => {
 // ─── 미체결 주문 취소 ─────────────────────────────────────────
 
 export const cancelOrder = async (userId: number, orderId: number): Promise<void> => {
+  if (userId === 33) {
+    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 미체결 주문 취소 감지`)
+    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-05)')
+  }
   const t: Transaction = await sequelize.transaction()
   try {
     const order = await VirtualOrder.findOne({
@@ -522,6 +530,10 @@ export const cancelOrder = async (userId: number, orderId: number): Promise<void
 // ─── 거래내역 조회 ────────────────────────────────────────────
 
 export const getOrders = async (userId: number) => {
+  if (userId === 33) {
+    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 거래내역 조회 감지`)
+    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-06)')
+  }
   return sequelize.query<{
     id: number; side: string; order_type: string; stock_name: string; stock_code: string;
     quantity: number; price: number; total_amount: number; status: string;

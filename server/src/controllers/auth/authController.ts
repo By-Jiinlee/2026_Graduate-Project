@@ -149,36 +149,6 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
         message: '비정상적인 접근이 감지되었습니다.'
       })
     }
-    // ----------------( 행동 기반 봇 탐지) ----------------
-    if (behaviorData) {
-      const { mouseMoveCount, keyPressCount, avgTypingInterval, timeOnPage } = behaviorData;
-      let isBot = false;
-      let botReason = '';
-
-      // 1. 비현실적인 체류 시간: 폼이 뜨자마자 0.5초(500ms)도 안 돼서 제출 버튼을 누름
-      if (timeOnPage < 500) {
-        isBot = true;
-        botReason = '비현실적인 폼 제출 속도(스크립트 렌더링 즉시 제출)';
-      } 
-      // 2. 초인적인 타자 속도: 키보드를 치긴 쳤는데, 타자 간격이 50ms 미만
-      else if (keyPressCount > 0 && avgTypingInterval < 50) {
-        isBot = true;
-        botReason = '인간의 한계를 벗어난 타자 속도';
-      } 
-      // 3. 물리적 상호작용 완전 부재: 마우스 이동도 없고, 탭/엔터(키보드) 입력도 전혀 없음 (API 직접 호출)
-      else if (mouseMoveCount === 0 && keyPressCount === 0) {
-        isBot = true;
-        botReason = '물리적 상호작용 완전 부재 (API 직접 호출 의심)';
-      }
-
-      if (isBot) {
-        console.warn(`[SECURITY] 봇 접근 차단 감지: ${botReason} (email: ${email})`);
-        return res.status(403).json({
-          code: 'BOT_DETECTED',
-          message: '비정상적인 접근(매크로/봇)이 감지되었습니다.'
-        });
-      }
-    }
     const result = await authService.loginStep1(email, password)
     
     // 신뢰 기기 확인
@@ -197,6 +167,7 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
     // 적응형 인증(H) — 위험 점수 판정은 탐지 결과가 나온 뒤라야 하므로
     // analyzeAfterLogin 에서 수행한다. 여기서는 입력만 넘긴다.
     res.locals.isTrustedDevice = isTrustedDevice
+    res.locals.behaviorData = behaviorData;
 
     res.locals.responseData = {
       message: '1단계 인증 성공. 지갑 서명을 진행해주세요',

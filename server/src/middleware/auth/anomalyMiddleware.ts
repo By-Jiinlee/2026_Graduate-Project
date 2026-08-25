@@ -149,6 +149,7 @@ export async function analyzeAfterLogin(
           ip,
           loginAnomalies: anomalyResult.anomalies,
           abuseScore: res.locals.abuseScore,
+          behaviorData: res.locals.behaviorData
         })
         const risk = assessRisk(collected.signals)
         const decision = decideAuthRequirement({

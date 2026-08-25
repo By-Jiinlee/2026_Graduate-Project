@@ -33,6 +33,8 @@ export type RiskSignal =
   | 'ABNORMAL_COUNTRY'
   | 'IMPOSSIBLE_TRAVEL'
   | 'CREDENTIAL_STUFFING'
+  | 'BOT_BEHAVIOR_MOUSE'
+  | 'BOT_BEHAVIOR_TYPING'
   // ── 위협 인텔 ──
   | 'ABUSE_IP'
   | 'HONEYPOT_HISTORY'
@@ -93,6 +95,8 @@ export const RISK_POLICY = {
     ABNORMAL_TIME: 15,        // 심야 접속 (야근·교대근무일 수 있음)
 
     // 관측 신호 — 개별 가중치가 작고, 아래 CAP 으로 합계까지 제한된다
+    BOT_BEHAVIOR_MOUSE: 15,
+    BOT_BEHAVIOR_TYPING: 15,
     TRADE_FREQUENCY_SPIKE: 10,
     MULTI_ACCOUNT_SAME_IP: 10,
     ROUND_AMOUNT_PATTERN: 6,
@@ -105,7 +109,13 @@ export const RISK_POLICY = {
    * 단독으로는 어떤 재인증도 유발하지 못한다는 뜻이다. 차단 신호와 함께 설 때만
    * 등급을 밀어 올리는 보조 역할을 한다.
    */
-  OBSERVATIONAL: ['TRADE_FREQUENCY_SPIKE', 'ROUND_AMOUNT_PATTERN', 'MULTI_ACCOUNT_SAME_IP'] as const,
+  OBSERVATIONAL: [
+    'TRADE_FREQUENCY_SPIKE',
+    'ROUND_AMOUNT_PATTERN',
+    'MULTI_ACCOUNT_SAME_IP',
+    'BOT_BEHAVIOR_MOUSE',
+    'BOT_BEHAVIOR_TYPING'
+  ] as const,
   OBSERVATIONAL_CAP: 20,
 
   /**
@@ -296,6 +306,11 @@ export async function collectRiskSignals(params: {
   ip: string
   loginAnomalies?: readonly string[]
   abuseScore?: number
+  behaviorData?: {
+    mouseMoveCount: number;
+    avgTypingInterval: number;
+    timeOnPage: number;
+  }
 }): Promise<CollectedSignals> {
   const found = new Set<RiskSignal>()
   let degraded = false
@@ -303,6 +318,18 @@ export async function collectRiskSignals(params: {
   // 1) 이번 로그인에서 방금 탐지된 것 — DB 를 거치지 않고 바로 반영
   for (const a of params.loginAnomalies ?? []) {
     if ((LOGGED_TYPES as readonly string[]).includes(a)) found.add(a as RiskSignal)
+  }
+  if (params.behaviorData) {
+    console.log('[디버깅] 넘어온 행동 데이터:', params.behaviorData);
+    const { mouseMoveCount, avgTypingInterval, timeOnPage } = params.behaviorData;
+    if (timeOnPage > 500 && mouseMoveCount === 0) {
+      console.info(`[RiskEngine] 마우스 움직임 없음 감지 (IP: ${params.ip}) -> 점수 부여`);
+      found.add('BOT_BEHAVIOR_MOUSE');
+    }
+    if (avgTypingInterval > 0 && avgTypingInterval < 50) {
+      console.info(`[RiskEngine] 비정상적 타자 속도 감지 (IP: ${params.ip}) -> 점수 부여`);
+      found.add('BOT_BEHAVIOR_TYPING');
+    }
   }
 
   // 2) 위협 인텔 — 이미 호출된 점수를 재사용한다

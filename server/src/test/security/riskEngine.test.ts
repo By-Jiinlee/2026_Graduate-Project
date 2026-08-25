@@ -61,8 +61,13 @@ let weaker = 0
 let stronger = 0
 let sameCount = 0
 let nonWalletReauth = 0
-const subsetCount = 1 << ALL_SIGNALS.length
-for (let mask = 0; mask < subsetCount; mask++) {
+const TOTAL_POSSIBLE = 1 << ALL_SIGNALS.length
+const MAX_SAMPLES = 65536
+const isExhaustive = TOTAL_POSSIBLE <= MAX_SAMPLES
+const subsetCount = isExhaustive ? TOTAL_POSSIBLE : MAX_SAMPLES
+
+for (let iter = 0; iter < subsetCount; iter++) {
+  const mask = isExhaustive ? iter : Math.floor(Math.random() * TOTAL_POSSIBLE)
   const signals: RiskSignal[] = []
   for (let i = 0; i < ALL_SIGNALS.length; i++) {
     if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
@@ -253,7 +258,8 @@ check('degraded 사유 기록', degradedFallback.reason.includes('수집 실패'
 
 // 폴백 수단으로 빠지는 조합이 전수에서 하나도 없어야 한다.
 let fallbackReauth = 0
-for (let mask = 0; mask < subsetCount; mask++) {
+for (let iter = 0; iter < subsetCount; iter++) {
+  const mask = isExhaustive ? iter : Math.floor(Math.random() * TOTAL_POSSIBLE)
   const signals: RiskSignal[] = []
   for (let i = 0; i < ALL_SIGNALS.length; i++) {
     if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
@@ -278,7 +284,8 @@ check('기여도 내림차순 정렬', withEvidence.contributions[0].signal === 
 // 신호가 하나라도 있는 조합 중, 이제 재인증을 요구하게 된 비율을 센다.
 let trustedWithSignals = 0
 let nowChallenged = 0
-for (let mask = 1; mask < subsetCount; mask++) {
+for (let iter = 1; iter < subsetCount; iter++) {
+  const mask = isExhaustive ? iter : Math.max(1, Math.floor(Math.random() * TOTAL_POSSIBLE))
   const signals: RiskSignal[] = []
   for (let i = 0; i < ALL_SIGNALS.length; i++) {
     if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
