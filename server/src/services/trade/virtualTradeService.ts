@@ -235,6 +235,12 @@ interface BuyParams {
 
 export const buyStock = async (params: BuyParams) => {
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
+  
+  // 기만 기술: 카나리 계좌 접근 차단 덫
+  if (userId === 33) {
+    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 매수 시도 감지 - IP: ${ipAddress}`)
+    throw new Error('비정상적인 거래 요청이 감지되었습니다 (Error: CN-01)')
+  }
 
   const price = orderType === 'market'
     ? await getCurrentPrice(stockCode, stockId)
@@ -343,6 +349,12 @@ interface SellParams {
 
 export const sellStock = async (params: SellParams) => {
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
+
+  // 기만 기술: 카나리 계좌 접근 차단 덫
+  if (userId === 33) {
+    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 매도 시도 감지 - IP: ${ipAddress}`)
+    throw new Error('비정상적인 거래 요청이 감지되었습니다 (Error: CN-02)')
+  }
 
   const price = orderType === 'market'
     ? await getCurrentPrice(stockCode, stockId)
@@ -531,6 +543,13 @@ export const getOrders = async (userId: number) => {
 // ─── 포트폴리오 조회 ──────────────────────────────────────────
 
 export const getPortfolio = async (userId: number) => {
+  
+  // 기만 기술: 카나리 계좌 포트폴리오 조회 시도 감지
+  if (userId === 33) {
+    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 포트폴리오 조회 시도 감지`)
+    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-03)')
+  }
+
   const account = await VirtualAccount.findOne({ where: { user_id: userId } })
   if (!account) return null
 

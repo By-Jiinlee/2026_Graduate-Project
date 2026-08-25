@@ -315,6 +315,11 @@ export default function Register() {
               onChange={handleChange}
               autoComplete="new-password"
               style={inputStyle}
+              // 브라우저 자동완성 및 클립보드 복사/붙여넣기 차단
+              readOnly={true}
+              onFocus={(e) => e.target.removeAttribute('readonly')}
+              onCopy={(e) => { e.preventDefault(); alert("보안상 복사할 수 없습니다."); }}
+              onPaste={(e) => { e.preventDefault(); alert("보안상 붙여넣기를 지원하지 않습니다. 직접 입력해주세요."); }}
             />
             {form.password && (
               <div
@@ -361,6 +366,11 @@ export default function Register() {
                     : '#e53935'
                   : '#ddd',
               }}
+              // 브라우저 자동완성 및 클립보드 복사/붙여넣기 차단
+              readOnly={true}
+              onFocus={(e) => e.target.removeAttribute('readonly')}
+              onCopy={(e) => { e.preventDefault(); alert("보안상 복사할 수 없습니다."); }}
+              onPaste={(e) => { e.preventDefault(); alert("보안상 붙여넣기를 지원하지 않습니다. 직접 입력해주세요."); }}
             />
             {form.confirm && form.password !== form.confirm && (
               <p

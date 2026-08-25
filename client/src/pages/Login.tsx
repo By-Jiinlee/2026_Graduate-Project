@@ -2,11 +2,14 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { setSigningSecret } from '../utils/tradeSigning'
 import { API_BASE } from '../utils/api'
+import { useBehaviorTracker } from '../hooks/useBehaviorTracker'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [honeypot, setHoneypot] = useState('') // 기만 기술(Honeypot) 상태 추가
   const [step, setStep] = useState(1) // 1: 이메일·비밀번호, 2: 지갑 서명
+  const { getBehaviorData } = useBehaviorTracker() // 사용자 행동 데이터 추적 훅
 
   // 2차 인증 수단은 온체인 지갑 서명 하나뿐이다 — PIN·이메일 코드 폴백을 두지 않는다.
   // 폴백이 존재하면 "그 폴백을 고르는 것" 이 곧 가장 약한 우회 경로가 되기 때문이다.
@@ -20,11 +23,17 @@ export default function Login() {
   const handleLoginStep1 = async () => {
     try {
       setError('')
+      const deviceFingerprint = localStorage.getItem('device_fingerprint') || 'unknown'
+      const behaviorData = getBehaviorData()// 현재까지 수집된 마우스/키보드 행동 데이터를 가져옴
+      
       const res = await fetch(`${API_BASE}/api/auth/login/step1`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Device-Fingerprint': deviceFingerprint
+        },
         credentials: 'include',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, honeypot, behaviorData }), // body에 behaviorData를 추가
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
@@ -54,9 +63,13 @@ export default function Login() {
   const executeStep2 = async (payload: { userId: number; walletAddress: string; signature?: string; rememberDevice?: boolean }) => {
     try {
       setError('')
+      const deviceFingerprint = localStorage.getItem('device_fingerprint') || 'unknown'
       const res = await fetch(`${API_BASE}/api/auth/login/step2`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Device-Fingerprint': deviceFingerprint // 헤더에 기기 지문 값 추가
+        },
         credentials: 'include',
         body: JSON.stringify(payload),
       })
@@ -200,13 +213,35 @@ export default function Login() {
         {step === 1 && (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
+              {/* [추가] 기만 기술 (Honeypot) - 봇만 입력하도록 유도하는 숨김 필드 */}
+              <input
+                type="text"
+                value={honeypot}
+                onChange={(e) => setHoneypot(e.target.value)}
+                style={{ display: 'none' }}
+                tabIndex={-1}
+                autoComplete="off" // TODO: 최신 브라우저 정책(자동완성 강제)으로 인해 기능 임시 보류
+              />
+              
               <div>
                 <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>이메일</label>
                 <input type="email" placeholder="이메일을 입력하세요" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
               </div>
               <div>
                 <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>비밀번호</label>
-                <input type="password" placeholder="비밀번호를 입력하세요" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleLoginStep1()} style={inputStyle} />
+                <input 
+                  type="password" 
+                  placeholder="비밀번호를 입력하세요" 
+                  value={password} 
+                  onChange={(e) => setPassword(e.target.value)} 
+                  onKeyDown={(e) => e.key === 'Enter' && handleLoginStep1()} 
+                  style={inputStyle} 
+                  autoComplete="new-password" // TODO: 최신 브라우저 정책(자동완성 강제)으로 인해 기능 임시 보류
+                  readOnly={true}
+                  onFocus={(e) => e.target.removeAttribute('readonly')}
+                  onCopy={(e) => { e.preventDefault(); alert("보안상 복사할 수 없습니다."); }}
+                  onPaste={(e) => { e.preventDefault(); alert("보안상 붙여넣기를 지원하지 않습니다. 직접 입력해주세요."); }}
+                />
               </div>
             </div>
             <button onClick={handleLoginStep1} style={btnStyle}>로그인</button>

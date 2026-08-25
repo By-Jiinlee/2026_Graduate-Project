@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^5.2.0",
     "axios": "^1.13.6",
     "lightweight-charts": "^5.1.0",
     "node-cron": "^4.2.1",

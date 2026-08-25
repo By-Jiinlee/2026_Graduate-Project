@@ -13,10 +13,12 @@ import MyPage from './pages/MyPage'
 import Register from './pages/Register'
 import Login from './pages/Login'
 import StockDetail from './pages/StockDetail'
+import fpPromise from '@fingerprintjs/fingerprintjs'
 // 💡 앞서 만든 설문 페이지 Import (경로가 다르면 수정해주세요)
 import Survey from './pages/Survey' 
 import AdminDashboard from './pages/AdminDashboard'
 import { Toaster } from 'react-hot-toast'
+
 
 const isLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWith('isLoggedIn=true'))
 
@@ -109,6 +111,20 @@ const SurveyGuard = ({ children }: { children: React.ReactNode }) => {
 }
 
 function App() {
+  // 앱 실행 시 디바이스 핑거프린트 생성 및 저장
+  useEffect(() => {
+    const initFingerprint = async () => {
+      try {
+        const fp = await fpPromise.load()
+        const result = await fp.get()
+        localStorage.setItem('device_fingerprint', result.visitorId)
+      } catch (error) {
+        console.error('FingerprintJS 초기화 실패:', error)
+      }
+    }
+    initFingerprint()
+  }, [])
+
   return (
     <BrowserRouter>
       <Toaster />
