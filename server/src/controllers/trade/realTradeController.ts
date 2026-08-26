@@ -4,6 +4,12 @@ import { verifyPin } from '../../services/trade/virtualTradeService'
 import { getClientIp } from '../../utils/getClientIp'
 import { getLocationFromIp } from '../../utils/getLocationFromIp'
 
+// 카나리 탐지 로그에 IP·UA 를 남기기 위한 요청 문맥 — 조회·계좌 관리 경로용.
+const reqContext = (req: Request) => ({
+  ip: getClientIp(req),
+  userAgent: req.headers['user-agent'],
+})
+
 // ─── 계좌 등록 ────────────────────────────────────────────────────
 
 export const registerAccount = async (req: Request, res: Response) => {
@@ -18,7 +24,7 @@ export const registerAccount = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'],
       email: (req as any).user?.email,
     })
-    await svc.registerAccount(userId, appKey, appSecret, cano, acntPrdtCd)
+    await svc.registerAccount(userId, appKey, appSecret, cano, acntPrdtCd, reqContext(req))
     res.json({ message: '실거래 계좌가 등록되었습니다' })
   } catch (err: any) {
     res.status(400).json({ message: err.message })
@@ -30,7 +36,7 @@ export const registerAccount = async (req: Request, res: Response) => {
 export const getAccountStatus = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const status = await svc.getAccountStatus(userId)
+    const status = await svc.getAccountStatus(userId, reqContext(req))
     res.json(status)
   } catch (err: any) {
     res.status(500).json({ message: err.message })
@@ -49,7 +55,7 @@ export const removeAccount = async (req: Request, res: Response) => {
       userAgent: req.headers['user-agent'],
       email: (req as any).user?.email,
     })
-    await svc.removeAccount(userId)
+    await svc.removeAccount(userId, reqContext(req))
     res.json({ message: '실거래 계좌가 해제되었습니다' })
   } catch (err: any) {
     res.status(400).json({ message: err.message })
@@ -61,7 +67,7 @@ export const removeAccount = async (req: Request, res: Response) => {
 export const getBalance = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const balance = await svc.getBalance(userId)
+    const balance = await svc.getBalance(userId, reqContext(req))
     res.json(balance)
   } catch (err: any) {
     res.status(400).json({ message: err.message })
@@ -131,7 +137,7 @@ export const sellStock = async (req: Request, res: Response) => {
 export const getOrders = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const orders = await svc.getOrders(userId)
+    const orders = await svc.getOrders(userId, reqContext(req))
     res.json(orders)
   } catch (err: any) {
     res.status(500).json({ message: err.message })

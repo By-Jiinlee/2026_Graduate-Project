@@ -82,7 +82,7 @@ export const RISK_POLICY = {
     REPLAY_ATTACK: 65,        // 논스 재사용
     CREDENTIAL_STUFFING: 55,  // 반복 실패 후 성공
     ABUSE_IP: 55,             // 외부 위협 인텔에서 악성으로 분류된 IP
-    HONEYPOT_HISTORY: 50,     // 이 IP 가 함정 엔드포인트를 건드린 적이 있다
+    HONEYPOT_HISTORY: 50,     // 이 IP 가 함정 엔드포인트·미끼 계좌를 건드린 적이 있다
 
     // 탈취 가능성을 시사하지만 정상일 수도 있는 신호
     ABNORMAL_COUNTRY: 40,     // 평소와 다른 국가 (여행일 수 있음)
@@ -337,18 +337,20 @@ export async function collectRiskSignals(params: {
 
   const { Op } = await import('sequelize')
   const { default: AnomalyLog } = await import('../../models/auth/AnomalyLog')
+  // 이 파일은 모델을 동적으로 불러온다(순환 의존 회피) — 같은 방식을 따른다.
+  const { canaryHistoryWhere } = await import('../security/canaryService')
 
-  // 3) 이 IP 가 함정 엔드포인트를 건드린 적이 있는가
+  // 3) 이 IP 가 함정 엔드포인트(허니팟 URL)·미끼 계좌를 건드린 적이 있는가
   try {
     const since = new Date(Date.now() - COLLECT_POLICY.HONEYPOT_LOOKBACK_DAYS * 86_400_000)
     const hit = await AnomalyLog.findOne({
-      where: { ip: params.ip, anomaly_type: 'HONEYPOT', created_at: { [Op.gte]: since } },
+      where: canaryHistoryWhere(params.ip, since),
       attributes: ['id'],
     })
     if (hit) found.add('HONEYPOT_HISTORY')
   } catch (err) {
     degraded = true
-    console.error('[RiskEngine] 허니팟 이력 조회 실패:', err)
+    console.error('[RiskEngine] 허니팟·카나리 이력 조회 실패:', err)
   }
 
   // 4) 최근 이 사용자에게 기록된 위험 신호

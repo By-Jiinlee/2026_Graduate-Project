@@ -28,6 +28,8 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   TRADE_FREQUENCY_SPIKE: { label: '거래 빈도 급증(관측)', color: '#546e7a' },
   ROUND_AMOUNT_PATTERN:  { label: '반올림 금액 반복(관측)', color: '#78909c' },
   MULTI_ACCOUNT_SAME_IP: { label: '동일IP 다계정(관측)', color: '#607d8b' },
+  ADAPTIVE_STEPUP:    { label: '적응형 재인증',   color: '#00695c' },
+  CANARY_ACCESS:      { label: '카나리 계좌',     color: '#880e4f' },
 }
 
 const ACTION_META: Record<string, { label: string; color: string }> = {
@@ -41,9 +43,12 @@ type Stats = {
   honeypotHits: number; integrityViolations: number
   tradeAnomalies: number; tradeBlocked: number
 }
+// 서버(getAnomalyLogs)는 AnomalyLog 행을 통째로 내려준다 — user_id·user_agent 도 온다.
+// 타입에만 빠져 있어 허니팟 표에서 `(h as any).user_agent` 로 우회하고 있었다.
 type AnomalyLog = {
-  id: number; email: string | null; ip: string; anomaly_type: string
+  id: number; user_id: number | null; email: string | null; ip: string; anomaly_type: string
   action: string; detail: string; country: string | null; resolved: boolean; created_at: string
+  user_agent: string | null
 }
 type LockedUser = { id: number; email: string; name: string; created_at: string }
 type ChartRow = { anomaly_type?: string; date?: string; count: number; label?: string }
@@ -52,7 +57,11 @@ type InferenceLog = {
   decision: 'ALLOW' | 'DENY'; deny_reason: string | null; label: number | null
   latency_ms: number | null; adapter: string | null; created_at: string
 }
-type InferenceSummary = { allowed24h: number; denied24h: number; denyByReason: { deny_reason: string | null; count: number }[] }
+type InferenceSummary = {
+  allowed24h: number; denied24h: number
+  allowedTotal: number; deniedTotal: number
+  denyByReason: { deny_reason: string | null; count: number }[]
+}
 type AdaptiveAuthStats = {
   windowDays: number; total: number; note: string
   byRequirement: Record<string, number>
@@ -76,6 +85,7 @@ export default function AdminDashboard() {
   const [inferenceLogs, setInferenceLogs] = useState<InferenceLog[]>([])
   const [inferenceSummary, setInferenceSummary] = useState<InferenceSummary | null>(null)
   const [adaptive, setAdaptive] = useState<AdaptiveAuthStats | null>(null)
+  const [selectedLog, setSelectedLog] = useState<AnomalyLog | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -324,8 +334,8 @@ export default function AdminDashboard() {
                       <td style={{ ...td, fontFamily: 'monospace', fontSize: '12px' }}>{h.ip}</td>
                       <td style={{ ...td, color: '#b71c1c' }}>{h.detail.replace('허니팟 접근 탐지: ', '')}</td>
                       <td style={{ ...td, color: '#aaa', fontSize: '11px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={(h as any).user_agent ?? ''}>
-                        {(h as any).user_agent ?? '—'}
+                        title={h.user_agent ?? ''}>
+                        {h.user_agent ?? '—'}
                       </td>
                     </tr>
                   ))
@@ -402,8 +412,11 @@ export default function AdminDashboard() {
         <div style={section}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <p style={{ ...sectionTitle, margin: 0 }}>AI 추론 요청 감사 로그
+              {/* 표는 전체 기간 최신순이라 24시간 수치만 보이면 서로 모순처럼 읽힌다 — 두 창을 함께 표기한다. */}
               <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888', fontWeight: 400 }}>
-                최근 24시간 · 허용 {inferenceSummary?.allowed24h ?? 0}건 / 차단 {inferenceSummary?.denied24h ?? 0}건
+                최근 24시간 허용 {inferenceSummary?.allowed24h ?? 0} / 차단 {inferenceSummary?.denied24h ?? 0}
+                <span style={{ margin: '0 6px', color: '#ddd' }}>|</span>
+                누적 허용 {inferenceSummary?.allowedTotal ?? 0} / 차단 {inferenceSummary?.deniedTotal ?? 0}
               </span>
             </p>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
@@ -414,6 +427,9 @@ export default function AdminDashboard() {
               ))}
             </div>
           </div>
+          <p style={{ fontSize: '11.5px', color: '#aaa', margin: '0 0 8px' }}>
+            아래 표는 기간 제한 없이 최신 {inferenceLogs.length}건입니다 (24시간 이전 기록 포함).
+          </p>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -448,6 +464,74 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        {/* ── 로그 상세 ──
+            detail 은 목록에서 260px 로 잘린다. 특히 ADAPTIVE_STEPUP 은 어떤 신호가 몇 점을
+            올려 그 등급이 나왔는지가 detail 뒤쪽에 들어 있어, 잘리면 판정 근거를 볼 수 없다. */}
+        {selectedLog && (() => {
+          const tm = TYPE_META[selectedLog.anomaly_type] ?? { label: selectedLog.anomaly_type, color: '#999' }
+          const am = ACTION_META[selectedLog.action] ?? { label: selectedLog.action, color: '#999' }
+          const row = (label: string, value: React.ReactNode) => (
+            <div style={{ display: 'flex', gap: '12px', padding: '9px 0', borderBottom: '1px solid #f2f2f2' }}>
+              <span style={{ width: '96px', flexShrink: 0, fontSize: '12px', color: '#999', fontWeight: 600 }}>{label}</span>
+              <span style={{ fontSize: '13px', color: '#333', wordBreak: 'break-all' }}>{value}</span>
+            </div>
+          )
+          return (
+            <div
+              onClick={() => setSelectedLog(null)}
+              style={{
+                position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.45)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px',
+              }}
+            >
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  backgroundColor: '#fff', borderRadius: '16px', padding: '24px 26px',
+                  width: '100%', maxWidth: '620px', maxHeight: '82vh', overflowY: 'auto',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={badge(tm.color)}>{tm.label}</span>
+                    <span style={badge(am.color)}>{am.label}</span>
+                    <span style={{ fontSize: '12px', color: selectedLog.resolved ? '#3CB371' : '#e53935', fontWeight: 600 }}>
+                      {selectedLog.resolved ? '해결됨' : '미해결'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setSelectedLog(null)}
+                    style={{ border: 'none', background: 'none', fontSize: '20px', color: '#bbb', cursor: 'pointer', lineHeight: 1 }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {row('로그 ID', `#${selectedLog.id}`)}
+                {row('발생 시각', new Date(selectedLog.created_at).toLocaleString('ko-KR'))}
+                {row('계정', selectedLog.email ?? '—')}
+                {row('사용자 ID', selectedLog.user_id ?? '—')}
+                {row('IP', <span style={{ fontFamily: 'monospace' }}>{selectedLog.ip}</span>)}
+                {row('국가', selectedLog.country ?? '—')}
+                {row('User-Agent', <span style={{ fontSize: '12px', color: '#666' }}>{selectedLog.user_agent ?? '—'}</span>)}
+
+                <div style={{ marginTop: '16px' }}>
+                  <p style={{ fontSize: '12px', color: '#999', fontWeight: 600, marginBottom: '8px' }}>상세 내용</p>
+                  <pre style={{
+                    margin: 0, padding: '14px', backgroundColor: '#f8f9fa', borderRadius: '10px',
+                    fontSize: '12.5px', lineHeight: 1.7, color: '#333',
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    fontFamily: 'inherit',
+                  }}>
+                    {selectedLog.detail}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
         {/* ── 5. 이상탐지 로그 전체 ── */}
         <div style={section}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -476,7 +560,12 @@ export default function AdminDashboard() {
                     const tm = TYPE_META[log.anomaly_type] ?? { label: log.anomaly_type, color: '#999' }
                     const am = ACTION_META[log.action] ?? { label: log.action, color: '#999' }
                     return (
-                      <tr key={log.id} style={{ backgroundColor: log.resolved ? '#fafafa' : '#fff' }}>
+                      <tr key={log.id}
+                        onClick={() => setSelectedLog(log)}
+                        style={{ backgroundColor: log.resolved ? '#fafafa' : '#fff', cursor: 'pointer' }}
+                        onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f0f7f4')}
+                        onMouseLeave={e => (e.currentTarget.style.backgroundColor = log.resolved ? '#fafafa' : '#fff')}
+                      >
                         <td style={{ ...td, whiteSpace: 'nowrap', color: '#888', fontSize: '12px' }}>
                           {new Date(log.created_at).toLocaleString('ko-KR')}
                         </td>

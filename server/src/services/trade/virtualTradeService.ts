@@ -11,6 +11,14 @@ import { recordSeed, logTrade, getTradeNonce, verifyTradeSignature } from '../we
 import Wallet from '../../models/user/Wallet'
 import { TRADE_POLICY } from '../auth/tradeAnomalyService'
 import { recordTradeAuthAttempt } from '../auth/anomalyService'
+import { assertNotCanary } from '../security/canaryService'
+
+// 조회 계열 함수는 원래 userId 만 받는다. 카나리 탐지 기록에 IP·UA 를 남기려면
+// 호출부(컨트롤러)의 요청 문맥이 필요하므로 선택 인자로 받는다 — 기존 호출부는 그대로 동작한다.
+export interface AccessContext {
+  ip?: string
+  userAgent?: string
+}
 
 export const INITIAL_BALANCE = 10_000_000
 
@@ -235,12 +243,8 @@ interface BuyParams {
 
 export const buyStock = async (params: BuyParams) => {
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
-  
-  // 기만 기술: 카나리 계좌 접근 차단 덫
-  if (userId === 33) {
-    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 매수 시도 감지 - IP: ${ipAddress}`)
-    throw new Error('비정상적인 거래 요청이 감지되었습니다 (Error: CN-01)')
-  }
+
+  await assertNotCanary({ userId, code: 'CN-01', action: '모의투자 매수', ip: ipAddress, userAgent })
 
   const price = orderType === 'market'
     ? await getCurrentPrice(stockCode, stockId)
@@ -350,11 +354,7 @@ interface SellParams {
 export const sellStock = async (params: SellParams) => {
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
 
-  // 기만 기술: 카나리 계좌 접근 차단 덫
-  if (userId === 33) {
-    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 매도 시도 감지 - IP: ${ipAddress}`)
-    throw new Error('비정상적인 거래 요청이 감지되었습니다 (Error: CN-02)')
-  }
+  await assertNotCanary({ userId, code: 'CN-02', action: '모의투자 매도', ip: ipAddress, userAgent })
 
   const price = orderType === 'market'
     ? await getCurrentPrice(stockCode, stockId)
@@ -464,11 +464,8 @@ export const sellStock = async (params: SellParams) => {
 
 // ─── 미체결 주문 조회 ─────────────────────────────────────────
 
-export const getPendingOrders = async (userId: number) => {
-  if (userId === 33) {
-    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 미체결 주문 조회 감지`)
-    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-04)')
-  }
+export const getPendingOrders = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-04', action: '미체결 주문 조회', ...ctx })
   return sequelize.query<{
     id: number
     side: string
@@ -492,11 +489,8 @@ export const getPendingOrders = async (userId: number) => {
 
 // ─── 미체결 주문 취소 ─────────────────────────────────────────
 
-export const cancelOrder = async (userId: number, orderId: number): Promise<void> => {
-  if (userId === 33) {
-    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 미체결 주문 취소 감지`)
-    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-05)')
-  }
+export const cancelOrder = async (userId: number, orderId: number, ctx?: AccessContext): Promise<void> => {
+  await assertNotCanary({ userId, code: 'CN-05', action: '미체결 주문 취소', ...ctx })
   const t: Transaction = await sequelize.transaction()
   try {
     const order = await VirtualOrder.findOne({
@@ -529,11 +523,8 @@ export const cancelOrder = async (userId: number, orderId: number): Promise<void
 
 // ─── 거래내역 조회 ────────────────────────────────────────────
 
-export const getOrders = async (userId: number) => {
-  if (userId === 33) {
-    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 거래내역 조회 감지`)
-    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-06)')
-  }
+export const getOrders = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-06', action: '모의투자 거래내역 조회', ...ctx })
   return sequelize.query<{
     id: number; side: string; order_type: string; stock_name: string; stock_code: string;
     quantity: number; price: number; total_amount: number; status: string;
@@ -554,13 +545,8 @@ export const getOrders = async (userId: number) => {
 
 // ─── 포트폴리오 조회 ──────────────────────────────────────────
 
-export const getPortfolio = async (userId: number) => {
-  
-  // 기만 기술: 카나리 계좌 포트폴리오 조회 시도 감지
-  if (userId === 33) {
-    console.warn(`[SECURITY] 카나리 계좌(ID: 33) 포트폴리오 조회 시도 감지`)
-    throw new Error('비정상적인 접근이 감지되었습니다 (Error: CN-03)')
-  }
+export const getPortfolio = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-03', action: '포트폴리오 조회', ...ctx })
 
   const account = await VirtualAccount.findOne({ where: { user_id: userId } })
   if (!account) return null

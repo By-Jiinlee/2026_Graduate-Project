@@ -4,6 +4,8 @@ import RealAccount from '../../models/trade/RealAccount'
 import RealOrder from '../../models/trade/RealOrder'
 import { getUserKisToken, clearUserToken } from '../market/KisUserAuth'
 import { verifyPin } from './virtualTradeService'
+import { assertNotCanary } from '../security/canaryService'
+import type { AccessContext } from './virtualTradeService'
 import { evaluateTradeRequest } from '../auth/tradeAnomalyService'
 import { decryptField, encryptField } from '../auth/fieldCrypto'
 
@@ -49,7 +51,10 @@ export const registerAccount = async (
   appSecret: string,
   cano: string,
   acntPrdtCd: string,
+  ctx?: AccessContext,
 ): Promise<void> => {
+  await assertNotCanary({ userId, code: 'CN-13', action: '실거래 계좌 등록', ...ctx })
+
   if (!/^\d{8}$/.test(cano)) throw new Error('계좌번호는 숫자 8자리여야 합니다')
   if (!/^\d{2}$/.test(acntPrdtCd)) throw new Error('계좌상품코드는 숫자 2자리여야 합니다')
   if (!appKey || appKey.length < 10) throw new Error('유효하지 않은 APP KEY입니다')
@@ -88,7 +93,10 @@ export const registerAccount = async (
 
 export const getAccountStatus = async (
   userId: number,
+  ctx?: AccessContext,
 ): Promise<{ isRegistered: boolean; buyableAmount?: number; maskedCano?: string }> => {
+  await assertNotCanary({ userId, code: 'CN-11', action: '실거래 계좌 상태 조회', ...ctx })
+
   const account = await RealAccount.findOne({ where: { user_id: userId, is_active: true } })
   if (!account) return { isRegistered: false }
 
@@ -125,7 +133,9 @@ export const getAccountStatus = async (
 
 // ─── 계좌 삭제 ────────────────────────────────────────────────────
 
-export const removeAccount = async (userId: number): Promise<void> => {
+export const removeAccount = async (userId: number, ctx?: AccessContext): Promise<void> => {
+  await assertNotCanary({ userId, code: 'CN-12', action: '실거래 계좌 해제', ...ctx })
+
   const account = await RealAccount.findOne({ where: { user_id: userId } })
   if (!account) throw new Error('등록된 실거래 계좌가 없습니다')
   clearUserToken(userId)
@@ -134,7 +144,9 @@ export const removeAccount = async (userId: number): Promise<void> => {
 
 // ─── KIS 잔고 상세 조회 ───────────────────────────────────────────
 
-export const getBalance = async (userId: number) => {
+export const getBalance = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-10', action: '실거래 잔고 조회', ...ctx })
+
   const account = await RealAccount.findOne({ where: { user_id: userId, is_active: true } })
   if (!account) throw new Error('실거래 계좌가 등록되지 않았습니다')
 
@@ -200,6 +212,16 @@ interface OrderParams {
 }
 
 const placeKisOrder = async (params: OrderParams) => {
+  // 기만 기술 — 미끼 계좌는 실거래 주문 경로에도 진입할 수 없다.
+  // KIS 로 주문이 나가기 전, PIN 검증보다도 먼저 끊는다.
+  await assertNotCanary({
+    userId: params.userId,
+    code: params.side === 'buy' ? 'CN-07' : 'CN-08',
+    action: params.side === 'buy' ? '실거래 매수' : '실거래 매도',
+    ip: params.ipAddress,
+    userAgent: params.userAgent,
+  })
+
   // PIN 검증 결과를 기록해야 "반복 실패 후 성공"(M-5)을 판정할 수 있으므로 문맥을 넘긴다.
   await verifyPin(params.userId, params.pin, {
     ip: params.ipAddress,
@@ -287,7 +309,8 @@ export const sellStock = (params: Omit<OrderParams, 'side'>) =>
 
 // ─── 거래내역 조회 (우리 DB) ─────────────────────────────────────
 
-export const getOrders = async (userId: number) => {
+export const getOrders = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-09', action: '실거래 거래내역 조회', ...ctx })
   return RealOrder.findAll({
     where: { user_id: userId },
     order: [['ordered_at', 'DESC']],

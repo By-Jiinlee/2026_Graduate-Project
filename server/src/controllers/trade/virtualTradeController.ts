@@ -4,6 +4,13 @@ import { getClientIp } from '../../utils/getClientIp'
 import { getLocationFromIp } from '../../utils/getLocationFromIp'
 import { evaluateTradeRequest, TradeAssessment } from '../../services/auth/tradeAnomalyService'
 
+// 조회 계열은 요청 문맥을 서비스로 넘기지 않았다. 카나리 탐지 로그에 IP·UA 가
+// 남아야 이후 위험 점수 산정(riskEngine)에서 그 IP 를 다시 식별할 수 있다.
+const reqContext = (req: Request) => ({
+  ip: getClientIp(req),
+  userAgent: req.headers['user-agent'],
+})
+
 // ─── 거래 이상탐지 게이트 (M-1) ───────────────────────────────
 // 주문 실행 직전에 무결성·이상금액을 판정한다.
 //  BLOCK   : 정상 클라이언트가 만들 수 없는 주문 → 400 으로 거절
@@ -197,7 +204,7 @@ export const sellStock = async (req: Request, res: Response) => {
 export const getPendingOrders = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const orders = await tradeService.getPendingOrders(userId)
+    const orders = await tradeService.getPendingOrders(userId, reqContext(req))
     res.json(orders)
   } catch (err: any) {
     res.status(500).json({ message: err.message })
@@ -212,7 +219,7 @@ export const cancelOrder = async (req: Request, res: Response) => {
     const orderId = Number(req.params.orderId)
     if (!orderId) return res.status(400).json({ message: '유효하지 않은 주문 ID입니다' })
 
-    await tradeService.cancelOrder(userId, orderId)
+    await tradeService.cancelOrder(userId, orderId, reqContext(req))
     res.json({ message: '주문이 취소되었습니다' })
   } catch (err: any) {
     res.status(400).json({ message: err.message })
@@ -224,7 +231,7 @@ export const cancelOrder = async (req: Request, res: Response) => {
 export const getOrders = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const orders = await tradeService.getOrders(userId)
+    const orders = await tradeService.getOrders(userId, reqContext(req))
     res.json(orders)
   } catch (err: any) {
     res.status(500).json({ message: err.message })
@@ -236,7 +243,7 @@ export const getOrders = async (req: Request, res: Response) => {
 export const getPortfolio = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const portfolio = await tradeService.getPortfolio(userId)
+    const portfolio = await tradeService.getPortfolio(userId, reqContext(req))
     if (!portfolio) return res.status(404).json({ message: '모의투자 계좌가 없습니다' })
     res.json(portfolio)
   } catch (err: any) {

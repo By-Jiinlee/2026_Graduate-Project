@@ -2,7 +2,7 @@ import { DataTypes, Model, Optional } from 'sequelize'
 import sequelize from '../../config/database'
 
 // DB 마이그레이션: src/database/migrations/20260730_anomaly_type_hmac.sql, 20260730_inference_logs.sql,
-//                  20260801_anomaly_type_trade.sql
+//                  20260801_anomaly_type_trade.sql, 20260826_anomaly_type_canary.sql
 export type AnomalyType =
   | 'BRUTE_FORCE'
   | 'ABNORMAL_TIME'
@@ -26,6 +26,7 @@ export type AnomalyType =
   | 'MULTI_ACCOUNT_SAME_IP'    // M-7 동일 IP 다계정 동일 종목 집중 거래
   | 'ROUND_AMOUNT_PATTERN'     // M-8 반올림 금액 반복 — 자동화 신호
   | 'ADAPTIVE_STEPUP'          // H  위험 점수로 추가 인증이 요구된 판정
+  | 'CANARY_ACCESS'            // 기만 기술 — 미끼(카나리) 계좌 진입점 접근
 export type AnomalyAction = 'ALERT' | 'BLOCK' | 'LOCK'
 
 interface AnomalyLogAttributes {
@@ -91,6 +92,7 @@ AnomalyLog.init(
         'MULTI_ACCOUNT_SAME_IP',
         'ROUND_AMOUNT_PATTERN',
         'ADAPTIVE_STEPUP',
+        'CANARY_ACCESS',
       ),
       allowNull: false,
     },

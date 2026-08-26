@@ -164,20 +164,29 @@ export async function getInferenceLogs(req: Request, res: Response): Promise<voi
   const limit = Math.min(100, Number(req.query.limit) || 20)
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
-  const [rows, allowed, denied, denyByReason] = await Promise.all([
+  // 표(rows)는 기간 제한 없이 최신순이고 요약은 24시간 창이다. 두 값이 같은 카드에
+  // 놓이므로 누적 합계도 함께 내려보낸다 — 그러지 않으면 하루 이상 조용한 날에
+  // "허용 0건 / 차단 0건" 옆에 과거 로그가 나열되어 서로 모순처럼 읽힌다.
+  const [rows, allowed, denied, allowedTotal, deniedTotal, denyByReason] = await Promise.all([
     InferenceLog.findAll({ order: [['created_at', 'DESC']], limit }).catch(() => []),
     InferenceLog.count({ where: { decision: 'ALLOW', created_at: { [Op.gte]: dayAgo } } }).catch(() => 0),
     InferenceLog.count({ where: { decision: 'DENY', created_at: { [Op.gte]: dayAgo } } }).catch(() => 0),
+    InferenceLog.count({ where: { decision: 'ALLOW' } }).catch(() => 0),
+    InferenceLog.count({ where: { decision: 'DENY' } }).catch(() => 0),
+    // 차단 사유 분포는 누적 기준 — 아래 표(전체 기간)와 창을 맞춘다.
     InferenceLog.findAll({
       attributes: ['deny_reason', [fn('COUNT', col('id')), 'count']],
-      where: { decision: 'DENY', created_at: { [Op.gte]: dayAgo } },
+      where: { decision: 'DENY' },
       group: ['deny_reason'],
       order: [[fn('COUNT', col('id')), 'DESC']],
       raw: true,
     }).catch(() => []),
   ])
 
-  res.json({ logs: rows, summary: { allowed24h: allowed, denied24h: denied, denyByReason } })
+  res.json({
+    logs: rows,
+    summary: { allowed24h: allowed, denied24h: denied, allowedTotal, deniedTotal, denyByReason },
+  })
 }
 
 // 잠긴 계정 목록
