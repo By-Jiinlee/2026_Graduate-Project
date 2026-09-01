@@ -33,6 +33,7 @@ import { startForeignAndInstitutionalScheduler } from './schedulers/market/Forei
 import { startMarketIndexScheduler } from './schedulers/market/MarketIndex'
 import { startListedSharesScheduler } from './schedulers/market/ListedShares'
 import { startMinuteCandleScheduler } from './schedulers/market/MinuteCandle'
+import { startCommodityScheduler } from './schedulers/market/Commodity'
 import { startStabilityScheduler } from './schedulers/market/Stability'
 import { startKisRealtime } from './services/market/KisRealtime'
 import { startMarketIndexRealtime } from './services/market/MarketIndexRealtime'
@@ -85,22 +86,30 @@ connectDB()
 httpServer.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
     console.log(describeCorsPolicy())
-    // 1단계
-    startStockPriceScheduler() //일봉
-    //startMarketIndexScheduler() //미국주요지수
-
-// 2단계
-    //startStock52WeekScheduler() //52주 신고가 신저가
+    // ── 시장 데이터 수집 ────────────────────────────────────
+    // KIS 유량은 앱키 단위로 공유되므로 KIS 수집기는 시각을 겹치지 않게 배치했다.
+    // 각 스케줄러 파일의 cron 주석 참고.
     //
-    //startForeignAndInstitutionalScheduler() //투자자별 거래량
-    //startShortSellingScheduler() //공매도
-    //startMinuteCandleScheduler() //일분봉
-    //startListedSharesScheduler() //상장주식수
+    // 기동 직후 1회 수집은 기본으로 꺼져 있다(RUN_INITIAL_COLLECT). 재배포·재시작이
+    // 잦은 환경에서 그때마다 전종목 수집이 처음부터 도는 것을 막기 위함이다.
 
-// 3단계
-    //startStabilityScheduler() //안정성 계산
-    //startFinancialStatementScheduler()    //재무제표
-    //startEcosIndicatorScheduler() //거시경제
+    // KIS 사용 — 순차 실행
+    startStockPriceScheduler()              // 일봉        평일 16:00
+    startShortSellingScheduler()            // 공매도      평일 16:20
+    startForeignAndInstitutionalScheduler() // 수급        평일 17:35
+    startMinuteCandleScheduler()            // 분봉        평일 08:00 / 19:20
+    startListedSharesScheduler()            // 상장주식수  매주 월 07:00
+
+    // 외부 API — KIS 와 무관
+    startMarketIndexScheduler()             // 미국지수    평일 18:00 (Yahoo)
+    startCommodityScheduler()               // 원자재      평일 18:00 (Yahoo)
+    startEcosIndicatorScheduler()           // 거시경제    평일 18:00 (ECOS)
+    startFinancialStatementScheduler()      // 재무제표    분기 1회 (DART)
+
+    // DB 계산 — 수집이 끝난 뒤 실행
+    startStock52WeekScheduler()             // 52주 신고저 평일 19:50
+
+    //startStabilityScheduler() //안정성 계산 — AI 피처에 쓰이지 않아 보류
 
     // 실시간 시세 (온디맨드 폴링 항상 활성, 전종목 크롤링은 ENABLE_FULL_CRAWL=true 필요)
     startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
