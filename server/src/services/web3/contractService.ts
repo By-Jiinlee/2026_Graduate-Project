@@ -15,11 +15,29 @@ import fs from 'fs'
 import path from 'path'
 
 // ABI 로드
-const abiPath = path.join(__dirname, '../../../../contracts/abi/AuthVerifier.abi.json')
-const abi = JSON.parse(fs.readFileSync(abiPath, 'utf-8'))
+//
+// 원본은 저장소 루트의 contracts/abi 지만, 배포 단위는 server/ 하나다(레일웨이 Root
+// Directory = server). 루트를 참조하면 컨테이너에 그 경로가 없어 모듈 로드 시점에
+// ENOENT 로 죽는다. 그래서 server/abi 에 사본을 두고 그쪽을 읽는다.
+// 컨트랙트를 다시 컴파일하면 contracts/abi → server/abi 로 복사해야 한다.
+//
+// 경로는 src(ts-node)와 dist(빌드본) 양쪽에서 같은 깊이라 그대로 통한다.
+const ABI_DIR = path.join(__dirname, '../../../abi')
 
-const mockTradeAbiPath = path.join(__dirname, '../../../../contracts/abi/MockTrade.abi.json')
-const mockTradeAbi = JSON.parse(fs.readFileSync(mockTradeAbiPath, 'utf-8'))
+const loadAbi = (file: string): any => {
+  const full = path.join(ABI_DIR, file)
+  try {
+    return JSON.parse(fs.readFileSync(full, 'utf-8'))
+  } catch (err: any) {
+    throw new Error(
+      `컨트랙트 ABI 를 읽지 못했습니다: ${full}\n` +
+      `contracts/abi 의 ${file} 을 server/abi 로 복사했는지 확인하세요. (${err.code ?? err.message})`,
+    )
+  }
+}
+
+const abi = loadAbi('AuthVerifier.abi.json')
+const mockTradeAbi = loadAbi('MockTrade.abi.json')
 
 const contractAddress = getAddress(process.env.CONTRACT_AUTH_ADDRESS as string)
 const mockTradeAddress = getAddress(process.env.CONTRACT_MOCK_TRADE_ADDRESS as string)
