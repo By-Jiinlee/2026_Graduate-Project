@@ -97,7 +97,9 @@ httpServer.listen(PORT, () => {
     startStockPriceScheduler()              // 일봉        평일 16:00
     startShortSellingScheduler()            // 공매도      평일 16:20
     startForeignAndInstitutionalScheduler() // 수급        평일 17:35
-    startMinuteCandleScheduler()            // 분봉        평일 08:00 / 19:20
+    // 분봉은 로컬에서 수동 수집 중이라 잠시 중단한다. 같은 KIS 앱키를 쓰므로
+    // 양쪽이 동시에 돌면 유량 초과로 서로 실패한다. 로컬 수집이 끝나면 되살릴 것.
+    //startMinuteCandleScheduler()          // 분봉        평일 08:00 / 19:20
     startListedSharesScheduler()            // 상장주식수  매주 월 07:00
 
     // 외부 API — KIS 와 무관
