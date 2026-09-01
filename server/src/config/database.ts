@@ -11,14 +11,22 @@ if (!DATABASE_URL) {
   throw new Error('DATABASE_URL 이 설정되지 않았습니다 — server/.env 를 확인하세요.')
 }
 
+// 레일웨이 내부 네트워크(*.railway.internal)는 컨테이너 간 사설망이라 TLS 를 제공하지
+// 않는다. 공개 프록시로 붙을 때만 TLS 를 요구한다 — 내부 주소에 ssl.require 를 걸면
+// 핸드셰이크 단계에서 연결 자체가 실패한다.
+const DB_HOST = new URL(DATABASE_URL).hostname
+const IS_INTERNAL = DB_HOST.endsWith('.railway.internal')
+
 const sequelize = new Sequelize(DATABASE_URL, {
   dialect: 'mysql',
   logging: false,
   dialectOptions: {
-    ssl: {
-      require: true,
-      rejectUnauthorized: false,
-    },
+    ...(IS_INTERNAL ? {} : {
+      ssl: {
+        require: true,
+        rejectUnauthorized: false,
+      },
+    }),
     // Railway 프록시 경유라 최초 핸드셰이크가 4초 내외로 느리다. mysql2 기본
     // 10초로는 네트워크가 흔들릴 때 연결 자체가 끊겨 정상 요청까지 실패한다.
     connectTimeout: 60_000,
