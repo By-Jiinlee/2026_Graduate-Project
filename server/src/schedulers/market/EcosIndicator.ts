@@ -9,6 +9,7 @@ import {
     MONTHLY_INDICATORS,
     QUARTERLY_INDICATORS,
 } from '../../services/market/EcosIndicator'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 일별 수집 ────────────────────────────────────────────────
 
@@ -136,13 +137,7 @@ export const startEcosIndicatorScheduler = (): void => {
     console.log('[EcosIndicator] 스케줄러 등록 완료 (일별/월별/분기별)')
 
     // 서버 시작 시 전체 초기 수집
-    collectDailyIndicators().catch((err) =>
-        console.error('[EcosIndicator] 초기 일별 수집 오류:', err)
-    )
-    collectMonthlyIndicators().catch((err) =>
-        console.error('[EcosIndicator] 초기 월별 수집 오류:', err)
-    )
-    collectQuarterlyIndicators().catch((err) =>
-        console.error('[EcosIndicator] 초기 분기별 수집 오류:', err)
-    )
+    runInitialCollect('EcosIndicator 일별', collectDailyIndicators)
+    runInitialCollect('EcosIndicator 월별', collectMonthlyIndicators)
+    runInitialCollect('EcosIndicator 분기별', collectQuarterlyIndicators)
 }

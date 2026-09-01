@@ -6,6 +6,9 @@
     "dev": "nodemon",
     "build": "tsc"
   },
+  "engines": {
+    "node": "24.x"
+  },
   "dependencies": {
     "adm-zip": "^0.5.17",
     "axios": "^1.13.6",

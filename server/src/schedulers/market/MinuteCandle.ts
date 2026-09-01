@@ -8,12 +8,15 @@ import {
     getAllLastMinuteDates,
 } from '../../services/market/MinuteCandle'
 import { kisUnsupported, markUnsupported } from '../../utils/kisUnsupported'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 주말 여부 확인 ───────────────────────────────────────────
+// 수집 "대상 날짜" 기준으로만 판정한다. 실행 시점 요일과는 무관.
 
 const isWeekend = (dateStr: string): boolean => {
     const d = new Date(`${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`)
-    return d.getDay() === 0 || d.getDay() === 6
+    const dow = d.getUTCDay()
+    return dow === 0 || dow === 6
 }
 
 // ─── 수집 로직 ────────────────────────────────────────────────
@@ -21,16 +24,9 @@ const isWeekend = (dateStr: string): boolean => {
 export const collectMinuteCandles = async (): Promise<void> => {
     const today = getToday()
 
-    // ① 주말이면 즉시 종료
-    const dow = new Date().getDay()
-    if (dow === 0 || dow === 6) {
-        console.log('[MinuteCandle] 주말 - 수집 스킵')
-        return
-    }
-
     console.log('[MinuteCandle] 수집 시작')
 
-    // ② 전종목 마지막 분봉 날짜 한번에 조회
+    // ① 전종목 마지막 분봉 날짜 한번에 조회
     console.log('[MinuteCandle] 전종목 마지막 분봉 날짜 조회 중...')
     const [stocks, lastDateMap] = await Promise.all([
         getActiveStocks(),
@@ -38,7 +34,7 @@ export const collectMinuteCandles = async (): Promise<void> => {
     ])
     console.log(`[MinuteCandle] 활성 종목 ${stocks.length}개 / 기존 분봉 보유 종목 ${lastDateMap.size}개`)
 
-    // ③ 전종목이 오늘까지 있으면 스킵 (DB 쿼리 없이 메모리에서 판단)
+    // ② 전종목이 오늘까지 있으면 스킵 (DB 쿼리 없이 메모리에서 판단)
     const alreadyDone = stocks.every((s) => {
         if (kisUnsupported.has(s.code)) return true
         const lastDate = lastDateMap.get(s.id)
@@ -126,7 +122,6 @@ export const startMinuteCandleScheduler = (): void => {
 
     console.log('[MinuteCandle] 스케줄러 등록 완료 (평일 09:05, 17:30 KST)')
 
-    collectMinuteCandles().catch((err) =>
-        console.error('[MinuteCandle] 초기 수집 오류:', err)
-    )
+    // 부팅 직후 누락분 백필 (요일 무관)
+    runInitialCollect('MinuteCandle', collectMinuteCandles)
 }

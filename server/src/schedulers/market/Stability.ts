@@ -6,6 +6,7 @@ import {
     getToday,
     dayAfter,
 } from '../../services/market/Stability'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 수집 로직 ────────────────────────────────────────────────
 
@@ -54,7 +55,5 @@ export const startStabilityScheduler = (): void => {
 
     console.log('[Stability] 스케줄러 등록 완료 (평일 19:00 KST)')
 
-    collectStability().catch((err) =>
-        console.error('[Stability] 초기 수집 오류:', err)
-    )
+    runInitialCollect('Stability', collectStability)
 }

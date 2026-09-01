@@ -5,6 +5,7 @@ import { Server, Socket } from 'socket.io'
 import { QueryTypes } from 'sequelize'
 import sequelize from '../../config/database'
 import { getKisAccessToken } from './KisAuth'
+import { dataPath } from '../../utils/dataDir'
 
 const BASE_URL      = 'https://openapi.koreainvestment.com:9443'
 const APP_KEY       = process.env.KIS_REAL_APP_KEY!
@@ -24,7 +25,7 @@ export const changeMap     = new Map<string, number>()
 export const changeRateMap = new Map<string, number>()
 
 // ─── priceMap 영속화 (재시작 시 복원) ────────────────────────
-const CACHE_PATH = path.join(__dirname, '../../../cache/priceCache.json')
+const CACHE_PATH = dataPath('cache', 'priceCache.json')
 
 const loadPriceCache = () => {
     try {

@@ -8,6 +8,7 @@ import {
     getToday,
     toKisDate,
 } from '../../services/market/ShortSelling'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 수집 로직 ────────────────────────────────────────────────
 
@@ -64,7 +65,20 @@ export const startShortSellingScheduler = (): void => {
 
     console.log('[ShortSelling] 스케줄러 등록 완료 (평일 17:00 KST)')
 
-    collectShortSelling().catch((err) =>
-        console.error('[ShortSelling] 초기 수집 오류:', err)
-    )
+    runInitialCollect('ShortSelling', collectShortSelling)
+}
+// ─── CLI (서버와 분리해 단독 실행) ────────────────────────────
+// 이 수집기는 FID_INPUT_DATE_1/2 로 기간을 제대로 넘기므로 백필이 그대로 된다.
+//   cd server && npx ts-node src/schedulers/market/ShortSelling.ts
+if (require.main === module) {
+    collectShortSelling()
+        .then(async () => {
+            const sequelize = (await import('../../config/database')).default
+            await sequelize.close()
+            process.exit(0)
+        })
+        .catch((err) => {
+            console.error('[ShortSelling] 실행 실패:', err?.message ?? err)
+            process.exit(1)
+        })
 }

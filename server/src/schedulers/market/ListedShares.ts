@@ -4,6 +4,7 @@ import {
     updateListedShares,
     getActiveStocks,
 } from '../../services/market/ListedShares'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 수집 로직 ────────────────────────────────────────────────
 
@@ -78,7 +79,5 @@ export const startListedSharesScheduler = (): void => {
     console.log('[ListedShares] 스케줄러 등록 완료 (매주 월요일 07:00 KST)')
 
     // 서버 시작 시 즉시 수집
-    collectListedShares().catch((err) =>
-        console.error('[ListedShares] 초기 수집 오류:', err)
-    )
+    runInitialCollect('ListedShares', collectListedShares)
 }

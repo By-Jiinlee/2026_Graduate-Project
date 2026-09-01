@@ -8,6 +8,7 @@ import {
     getToday,
     dayAfter,
 } from '../../services/market/Stock52Week'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 수집 로직 ────────────────────────────────────────────────
 
@@ -97,7 +98,5 @@ export const startStock52WeekScheduler = (): void => {
     console.log('[Stock52Week] 스케줄러 등록 완료 (평일 16:10 KST)')
 
     // 서버 시작 시 누락 데이터 즉시 수집
-    collectStock52Week().catch((err) =>
-        console.error('[Stock52Week] 초기 수집 오류:', err)
-    )
+    runInitialCollect('Stock52Week', collectStock52Week)
 }

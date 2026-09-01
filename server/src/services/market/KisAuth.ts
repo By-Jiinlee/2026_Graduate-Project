@@ -1,11 +1,13 @@
 import axios from 'axios'
 import fs from 'fs'
 import path from 'path'
+import { dataPath } from '../../utils/dataDir'
 
 const APP_KEY = process.env.KIS_REAL_APP_KEY!
 const APP_SECRET = process.env.KIS_REAL_APP_SECRET!
 const BASE_URL = 'https://openapi.koreainvestment.com:9443'
-const TOKEN_CACHE_PATH = path.join(__dirname, '../../../cache/kisToken.json')
+// 볼륨에 둔다 — 재시작마다 토큰을 새로 발급하면 KIS 발급 한도에 걸린다
+const TOKEN_CACHE_PATH = dataPath('cache', 'kisToken.json')
 
 let cachedToken: string | null = null
 let tokenExpiresAt: number = 0

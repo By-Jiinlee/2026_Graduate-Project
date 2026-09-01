@@ -44,9 +44,15 @@ export const fetchShortSelling = async (
     )
 
     console.log(`[ShortSelling] API 완료 - ${stockCode}`)
-    const output = res.data?.output
+
+    // output2에 일별 데이터가 있음
+    const output = res.data?.output2
     if (!Array.isArray(output)) return []
-    return output.filter((row: any) => row.stck_bsop_date)
+
+    // startDate 이후 데이터만 필터링
+    return output.filter((row: any) =>
+        row.stck_bsop_date && row.stck_bsop_date >= startDate
+    )
 }
 
 // ─── DB ───────────────────────────────────────────────────────
@@ -57,7 +63,7 @@ export const getLastSavedDate = async (stockId: number): Promise<string | null> 
          FROM short_selling WHERE stock_id = :stockId`,
         { replacements: { stockId }, type: QueryTypes.SELECT }
     )
-    return rows[0]?.last_date ?? null  // 'YYYYMMDD' or null
+    return rows[0]?.last_date ?? null
 }
 
 export const upsertShortSelling = async (
@@ -66,20 +72,20 @@ export const upsertShortSelling = async (
 ): Promise<void> => {
     if (rows.length === 0) return
 
-    const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?)').join(',')
+    const placeholders = rows.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?)').join(',')
     const flat = rows.flatMap((row) => [
         stockId,
         `${row.stck_bsop_date.slice(0, 4)}-${row.stck_bsop_date.slice(4, 6)}-${row.stck_bsop_date.slice(6, 8)}`,
-        parseInt(row.smtn_slng_qty) || null,
-        parseFloat(row.smtn_slng_amt) || null,
-        parseInt(row.acml_vol) || null,
-        parseFloat(row.acml_tr_pbmn) || null,
-        parseFloat(row.slng_qty_rt) || null,
-        parseFloat(row.slng_amt_rt) || null,
-        parseInt(row.smtn_bs_qty) || null,
-        parseFloat(row.smtn_bs_amt) || null,
-        parseInt(row.lstg_stqt) || null,
-        parseFloat(row.bs_qty_rt) || null,
+        parseInt(row.ssts_cntg_qty)   || null,   // short_volume: 당일 공매도 거래량
+        parseFloat(row.ssts_tr_pbmn)  || null,   // short_amount: 당일 공매도 거래대금
+        parseInt(row.acml_vol)        || null,   // total_volume: 당일 전체 거래량
+        parseFloat(row.acml_tr_pbmn)  || null,   // total_amount: 당일 전체 거래대금
+        parseFloat(row.ssts_vol_rlim) || null,   // short_volume_ratio: 공매도 거래량 비율
+        parseFloat(row.ssts_tr_pbmn_rlim) || null, // short_amount_ratio: 공매도 거래대금 비율
+        parseInt(row.stnd_vol_smtn)   || null,   // short_balance_qty: 공매도 잔고수량
+        parseFloat(row.stnd_tr_pbmn_smtn) || null, // short_balance_amount: 공매도 잔고금액
+        null,                                    // listed_shares: 응답에 없음
+        parseFloat(row.acml_ssts_cntg_qty_rlim) || null, // short_balance_ratio
     ])
 
     await sequelize.query(
@@ -88,17 +94,17 @@ export const upsertShortSelling = async (
           short_volume_ratio, short_amount_ratio, short_balance_qty, short_balance_amount,
           listed_shares, short_balance_ratio)
          VALUES ${placeholders}
-             ON DUPLICATE KEY UPDATE
-                                  short_volume         = VALUES(short_volume),
-                                  short_amount         = VALUES(short_amount),
-                                  total_volume         = VALUES(total_volume),
-                                  total_amount         = VALUES(total_amount),
-                                  short_volume_ratio   = VALUES(short_volume_ratio),
-                                  short_amount_ratio   = VALUES(short_amount_ratio),
-                                  short_balance_qty    = VALUES(short_balance_qty),
-                                  short_balance_amount = VALUES(short_balance_amount),
-                                  listed_shares        = VALUES(listed_shares),
-                                  short_balance_ratio  = VALUES(short_balance_ratio)`,
+         ON DUPLICATE KEY UPDATE
+             short_volume         = VALUES(short_volume),
+             short_amount         = VALUES(short_amount),
+             total_volume         = VALUES(total_volume),
+             total_amount         = VALUES(total_amount),
+             short_volume_ratio   = VALUES(short_volume_ratio),
+             short_amount_ratio   = VALUES(short_amount_ratio),
+             short_balance_qty    = VALUES(short_balance_qty),
+             short_balance_amount = VALUES(short_balance_amount),
+             listed_shares        = VALUES(listed_shares),
+             short_balance_ratio  = VALUES(short_balance_ratio)`,
         { replacements: flat, type: QueryTypes.INSERT }
     )
 }

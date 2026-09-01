@@ -37,3 +37,4 @@ priceCache.json
 CLAUDE.md
 CLAUDE.local.md
 server/cache/*.json
+server/data/*.json

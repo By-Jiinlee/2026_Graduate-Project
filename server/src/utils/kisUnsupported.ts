@@ -1,7 +1,9 @@
 import fs from 'fs'
 import path from 'path'
+import { dataPath } from './dataDir'
 
-const FILE = path.join(process.cwd(), 'data', 'kis_unsupported.json')
+// 볼륨에 둔다 — 날아가면 미지원 종목에 매번 헛호출을 하게 된다
+const FILE = dataPath('data', 'kis_unsupported.json')
 
 const load = (): Set<string> => {
     try {

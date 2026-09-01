@@ -76,6 +76,7 @@ httpServer.listen(PORT, () => {
 
 // 2단계
     //startStock52WeekScheduler() //52주 신고가 신저가
+    //
     //startForeignAndInstitutionalScheduler() //투자자별 거래량
     //startShortSellingScheduler() //공매도
     //startMinuteCandleScheduler() //일분봉
@@ -84,7 +85,7 @@ httpServer.listen(PORT, () => {
 // 3단계
     //startStabilityScheduler() //안정성 계산
     //startFinancialStatementScheduler()    //재무제표
-    startEcosIndicatorScheduler() //거시경제
+    //startEcosIndicatorScheduler() //거시경제
 
     // 실시간 시세 (온디맨드 폴링 항상 활성, 전종목 크롤링은 ENABLE_FULL_CRAWL=true 필요)
     startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))

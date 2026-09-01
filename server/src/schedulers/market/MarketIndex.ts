@@ -7,6 +7,7 @@ import {
     getToday,
     INDEX_MAP,
 } from '../../services/market/MarketIndex'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 수집 로직 ────────────────────────────────────────────────
 
@@ -57,7 +58,21 @@ export const startMarketIndexScheduler = (): void => {
 
     console.log('[MarketIndex] 스케줄러 등록 완료 (평일 18:00 KST)')
 
-    collectMarketIndices().catch((err) =>
-        console.error('[MarketIndex] 초기 수집 오류:', err)
-    )
+    runInitialCollect('MarketIndex', collectMarketIndices)
+}
+// ─── CLI (서버와 분리해 단독 실행) ────────────────────────────
+// 백필은 서버 라이프사이클에 묶지 않는다 — 재시작으로 중간에 끊기면 구간이 비고,
+// 그 구멍은 MAX(trade_date) 기준으로 이어받는 수집기가 다시 메우지 못한다.
+//   cd server && npx ts-node src/schedulers/market/MarketIndex.ts
+if (require.main === module) {
+    collectMarketIndices()
+        .then(async () => {
+            const sequelize = (await import('../../config/database')).default
+            await sequelize.close()
+            process.exit(0)
+        })
+        .catch(async (err) => {
+            console.error('[MarketIndex] 실행 실패:', err?.message ?? err)
+            process.exit(1)
+        })
 }

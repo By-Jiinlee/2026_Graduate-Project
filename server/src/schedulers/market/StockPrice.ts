@@ -8,6 +8,7 @@ import {
     getAllLastDates,
 } from '../../services/market/StockPrice';
 import { kisUnsupported, markUnsupported } from '../../utils/kisUnsupported'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 export const collectStockPrices = async () => {
     const today = getToday();
@@ -77,6 +78,5 @@ export const startStockPriceScheduler = () => {
 
     console.log("[StockPrice] 스케줄러 등록 완료 (평일 16:00 KST)");
 
-
-    collectStockPrices();
+    runInitialCollect('StockPrice', async () => { await collectStockPrices() });
 };

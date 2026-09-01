@@ -5,6 +5,7 @@ import {
     upsertFinancialStatements,
     getActiveCorpCodes,
 } from '../../services/market/FinancialStatement'
+import { runInitialCollect } from '../../utils/initialCollect'
 
 // ─── 수집 로직 ────────────────────────────────────────────────
 
@@ -69,7 +70,5 @@ export const startFinancialStatementScheduler = (): void => {
     console.log('[FinancialStatement] 스케줄러 등록 완료 (분기 1회)')
 
     // 서버 시작 시 누락 데이터 즉시 수집
-    collectFinancialStatements().catch((err) =>
-        console.error('[FinancialStatement] 초기 수집 오류:', err)
-    )
+    runInitialCollect('FinancialStatement', collectFinancialStatements)
 }

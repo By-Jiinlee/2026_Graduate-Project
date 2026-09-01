@@ -147,8 +147,11 @@ export const upsertMinuteCandles = async (
 
 // ─── 날짜 유틸 ────────────────────────────────────────────────
 
-export const getToday = (): string =>
-    new Date().toISOString().slice(0, 10).replace(/-/g, '')
+// KST 기준 오늘 날짜 (서버 TZ 무관)
+export const getToday = (): string => {
+    const kst = new Date(Date.now() + 9 * 60 * 60 * 1000)
+    return kst.toISOString().slice(0, 10).replace(/-/g, '')
+}
 
 export const dayAfter = (dateStr: string): string => {
     const normalized = dateStr.length === 8

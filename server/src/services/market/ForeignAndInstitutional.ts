@@ -16,12 +16,48 @@ interface Stock {
 
 // ─── KIS API ──────────────────────────────────────────────────
 
+/**
+ * KIS 가 rt_cd !== '0' 으로 돌려준 응답. 예전에는 이걸 빈 배열로 삼켜서
+ * "정상 동작 중이지만 아무것도 안 들어오는" 상태를 만들었다(아래 TIME LIMIT 참고).
+ */
+export class KisApiError extends Error {
+    constructor(
+        readonly rtCd: string,
+        readonly msgCd: string,
+        readonly msg: string,
+    ) {
+        super(`KIS 오류 rt_cd=${rtCd} ${msgCd} ${msg}`)
+    }
+    /** 초당 거래건수 초과 — 대기 후 재시도하면 된다 */
+    get isRateLimit(): boolean {
+        return this.msgCd === 'EGW00201'
+    }
+    /**
+     * 이 TR 은 당일치를 장 마감(15:40) 이후에만 준다. 그 전에 기준일을 '오늘'로 주면
+     * rt_cd=2 "TIME LIMIT 00:00 ~ 15:40" 이 오고 데이터가 한 건도 없다.
+     */
+    get isTimeLimit(): boolean {
+        return this.rtCd === '2' && /TIME LIMIT/i.test(this.msg)
+    }
+}
+
+/**
+ * 투자자별 매매동향 조회.
+ *
+ * 이 API 는 기준일(baseDate)로부터 과거 30거래일을 한 묶음으로 돌려준다. 예전 구현은
+ * baseDate 자리에 항상 getToday() 를 넣고 응답을 startDate 로 걸러내기만 해서,
+ * 30거래일보다 오래된 구간은 애초에 응답에 없어 영구히 메울 수 없었다.
+ * 기준일을 과거로 넘기면 그 시점의 30거래일이 정상적으로 내려온다(확인 완료).
+ *
+ * @param baseDate 조회 기준일 'YYYYMMDD' — 이 날짜로부터 과거 30거래일이 온다
+ * @param minDate  이 날짜 이전 행은 버린다(선택)
+ */
 export const fetchForeignAndInstitutional = async (
     stockCode: string,
-    startDate: string,
+    baseDate: string,
+    minDate?: string,
 ): Promise<any[]> => {
     const token = await getKisAccessToken()
-    console.log(`[ForeignAndInstitutional] API 호출 - ${stockCode}`)
 
     const res = await axios.get(
         `${BASE_URL}/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily`,
@@ -36,20 +72,24 @@ export const fetchForeignAndInstitutional = async (
             params: {
                 FID_COND_MRKT_DIV_CODE: 'J',
                 FID_INPUT_ISCD: stockCode,
-                FID_INPUT_DATE_1: getToday(),
+                FID_INPUT_DATE_1: baseDate,
                 FID_ORG_ADJ_PRC: '',
                 FID_ETC_CLS_CODE: '1',
             },
         }
     )
-    console.log(`[ForeignAndInstitutional] API 완료 - ${stockCode}`)
+
+    // 실패를 빈 배열로 삼키지 않는다 — 호출자가 재시도·중단을 판단해야 한다
+    const rtCd = String(res.data?.rt_cd ?? '')
+    if (rtCd !== '0') {
+        throw new KisApiError(rtCd, String(res.data?.msg_cd ?? ''), String(res.data?.msg1 ?? '').trim())
+    }
 
     const output = res.data?.output2
     if (!Array.isArray(output)) return []
 
-    // startDate 이후 데이터만 필터링
     return output.filter((row: any) =>
-        row.stck_bsop_date && row.stck_bsop_date >= startDate
+        row.stck_bsop_date && (!minDate || row.stck_bsop_date >= minDate)
     )
 }
 
@@ -62,6 +102,36 @@ export const getLastSavedDate = async (stockId: number): Promise<string | null> 
         { replacements: { stockId }, type: QueryTypes.SELECT }
     )
     return rows[0]?.last_date ?? null  // 'YYYYMMDD' or null
+}
+
+/**
+ * 전종목 마지막 저장일을 한 번에 조회한다(N+1 해소).
+ * 예전에는 루프 안에서 종목마다 getLastSavedDate 를 불러 3,590회 왕복했다 —
+ * DB 가 프록시 너머에 있어 그 왕복이 수집 시간의 상당 부분을 먹었다.
+ */
+export const getAllLastDates = async (): Promise<Map<number, string>> => {
+    const rows = await sequelize.query<{ stock_id: number; last_date: string }>(
+        `SELECT stock_id, DATE_FORMAT(MAX(trade_date), '%Y%m%d') AS last_date
+           FROM foreign_and_institutional GROUP BY stock_id`,
+        { type: QueryTypes.SELECT }
+    )
+    return new Map(rows.map((r) => [Number(r.stock_id), r.last_date]))
+}
+
+/** 거래일 캘린더 — stock_prices 를 기준으로 삼는다. 'YYYYMMDD' 오름차순 */
+export const getTradingDays = async (from: string, to: string): Promise<string[]> => {
+    const rows = await sequelize.query<{ d: string }>(
+        `SELECT DISTINCT DATE_FORMAT(price_date, '%Y%m%d') AS d FROM stock_prices
+          WHERE price_date BETWEEN :from AND :to ORDER BY d`,
+        {
+            replacements: {
+                from: `${from.slice(0, 4)}-${from.slice(4, 6)}-${from.slice(6, 8)}`,
+                to: `${to.slice(0, 4)}-${to.slice(4, 6)}-${to.slice(6, 8)}`,
+            },
+            type: QueryTypes.SELECT,
+        }
+    )
+    return rows.map((r) => r.d)
 }
 
 export const upsertForeignAndInstitutional = async (
