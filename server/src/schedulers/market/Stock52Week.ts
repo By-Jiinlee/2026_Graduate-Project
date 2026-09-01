@@ -85,8 +85,11 @@ export const collectStock52Week = async (): Promise<void> => {
 
 export const startStock52WeekScheduler = (): void => {
     // 평일 16:10 (장 마감 후)
+    // 19:50 — KIS 를 쓰지 않는 DB 계산이지만, stock_prices 를 읽어 52주 고저를 구하므로
+    // 일봉 수집이 끝난 뒤여야 한다. 예전 16:10 은 일봉(16:00~16:12) 한복판이라
+    // 당일치가 덜 들어온 상태로 계산됐다.
     cron.schedule(
-        '10 16 * * 1-5',
+        '50 19 * * 1-5',
         () => {
             collectStock52Week().catch((err) =>
                 console.error('[Stock52Week] 스케줄러 오류:', err)
@@ -95,7 +98,7 @@ export const startStock52WeekScheduler = (): void => {
         { timezone: 'Asia/Seoul' }
     )
 
-    console.log('[Stock52Week] 스케줄러 등록 완료 (평일 16:10 KST)')
+    console.log('[Stock52Week] 스케줄러 등록 완료 (평일 19:50 KST)')
 
     // 서버 시작 시 누락 데이터 즉시 수집
     runInitialCollect('Stock52Week', collectStock52Week)

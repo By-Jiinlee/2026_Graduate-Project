@@ -106,21 +106,22 @@ export const collectMinuteCandles = async (): Promise<void> => {
 // ─── 스케줄러 등록 ────────────────────────────────────────────
 
 export const startMinuteCandleScheduler = (): void => {
-    // 장 마감 후 당일 분봉 수집
+    // 19:20 — 수급(17:35~19:11) 종료 후. KIS 수집기 중 마지막 순번이다.
     cron.schedule(
-        '30 17 * * 1-5',
+        '20 19 * * 1-5',
         () => collectMinuteCandles().catch(err => console.error('[MinuteCandle] 스케줄러 오류:', err)),
         { timezone: 'Asia/Seoul' }
     )
 
-    // 장 시작 직후 전날 누락분 보완
+    // 08:00 — 전날 누락분 보완. 예전엔 09:05 였는데, 장 중에는 실시간 크롤러가
+    // KIS 유량을 가장 많이 쓰는 시간대라 개장 전으로 옮겼다(크롤러는 09:00 부터).
     cron.schedule(
-        '5 9 * * 1-5',
+        '0 8 * * 1-5',
         () => collectMinuteCandles().catch(err => console.error('[MinuteCandle] 오전 수집 오류:', err)),
         { timezone: 'Asia/Seoul' }
     )
 
-    console.log('[MinuteCandle] 스케줄러 등록 완료 (평일 09:05, 17:30 KST)')
+    console.log('[MinuteCandle] 스케줄러 등록 완료 (평일 08:00, 19:20 KST)')
 
     // 부팅 직후 누락분 백필 (요일 무관)
     runInitialCollect('MinuteCandle', collectMinuteCandles)

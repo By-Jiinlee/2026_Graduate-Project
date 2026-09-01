@@ -14,6 +14,12 @@ const APP_SECRET    = process.env.KIS_REAL_APP_SECRET!
 const CRAWL_BATCH_SIZE      = 20   // 병렬 배치 크기 (KIS rate limit 20 req/s 기준)
 const CRAWL_BATCH_INTERVAL  = 600  // 배치 간 최소 간격 ms (장 중, ~33 req/s 이내)
 const OVERTIME_BATCH_INTERVAL = 2000 // 시간외 배치 간격 ms
+
+// 시간외 단일가(16:00~18:00)는 10분 단위로 체결된다 — 가격이 10분에 한 번만 바뀐다.
+// 전종목 한 사이클이 6분쯤 걸리는데 쉬지 않고 반복하면 같은 값을 두세 번씩 다시
+// 받아오면서 KIS 유량만 먹는다. 같은 시간대에 공매도·수급 배치가 돌아야 하므로
+// 사이클 주기를 체결 주기에 맞추고 남는 시간은 양보한다(신선도 손실 없음).
+const OVERTIME_CYCLE_MS = 10 * 60_000
 const POLL_INTERVAL_MS  = 1000  // 온디맨드 폴링 주기 (장 중/시간외 공통 1s, 종목 1개라 부담 없음)
 
 // 기본값 false — 전종목 크롤링은 ENABLE_FULL_CRAWL=true 로 명시 활성화
@@ -299,6 +305,16 @@ const startFullCrawler = async (io: Server): Promise<void> => {
         console.log(`   소요시간: ${elapsed}s | 업데이트: ${updated}개 | 가격변동: ${changed}개 | RateLimit: ${rateLimitHits}회`)
         console.log(`   샘플: ${sample || '없음'}`)
         console.log(`========================================\n`)
+
+        // 시간외에는 다음 10분 경계까지 쉰다 — 그 시간을 배치 수집기가 쓴다.
+        // 장 중에는 체결이 계속 나므로 쉬지 않고 이어서 돈다.
+        if (overtime) {
+            const rest = OVERTIME_CYCLE_MS - (Date.now() - cycleStart)
+            if (rest > 0) {
+                console.log(`[KisCrawler] 시간외 — 다음 사이클까지 ${Math.round(rest / 1000)}s 대기 (단일가 10분 주기)`)
+                await sleep(rest)
+            }
+        }
     }
 }
 

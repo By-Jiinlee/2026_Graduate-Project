@@ -53,8 +53,11 @@ export const collectShortSelling = async (): Promise<void> => {
 // ─── 스케줄러 등록 ────────────────────────────────────────────
 
 export const startShortSellingScheduler = (): void => {
+    // 16:20 — 일봉(16:00, 약 12분) 종료 후. 3,590종목 × 500ms 라 약 65분 걸리므로
+    // 17:25 경 끝나고, 그 뒤 17:35 에 수급이 이어받는다. KIS 유량은 앱키 단위로
+    // 공유되므로 KIS 수집기는 반드시 하나씩 순차로 돈다.
     cron.schedule(
-        '0 17 * * 1-5',
+        '20 16 * * 1-5',
         () => {
             collectShortSelling().catch((err) =>
                 console.error('[ShortSelling] 스케줄러 오류:', err)
@@ -63,7 +66,7 @@ export const startShortSellingScheduler = (): void => {
         { timezone: 'Asia/Seoul' }
     )
 
-    console.log('[ShortSelling] 스케줄러 등록 완료 (평일 17:00 KST)')
+    console.log('[ShortSelling] 스케줄러 등록 완료 (평일 16:20 KST)')
 
     runInitialCollect('ShortSelling', collectShortSelling)
 }

@@ -215,8 +215,10 @@ export const backfillForeignAndInstitutional = async (
 // ─── 스케줄러 등록 ────────────────────────────────────────────
 
 export const startForeignAndInstitutionalScheduler = (): void => {
+    // 17:35 — 공매도(16:20~17:25) 종료 후. 3,590종목 × 1,600ms 라 약 96분 걸려
+    // 19:11 경 끝난다. 이 TR 은 당일치를 15:40 이후에만 주므로 그 제약도 만족한다.
     cron.schedule(
-        '30 16 * * 1-5',
+        '35 17 * * 1-5',
         () => {
             collectForeignAndInstitutional().catch((err) =>
                 console.error('[ForeignAndInstitutional] 스케줄러 오류:', err)
@@ -225,7 +227,7 @@ export const startForeignAndInstitutionalScheduler = (): void => {
         { timezone: 'Asia/Seoul' }
     )
 
-    console.log('[ForeignAndInstitutional] 스케줄러 등록 완료 (평일 16:30 KST)')
+    console.log('[ForeignAndInstitutional] 스케줄러 등록 완료 (평일 17:35 KST)')
 
     runInitialCollect('ForeignAndInstitutional', collectForeignAndInstitutional)
 }
