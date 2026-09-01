@@ -9,7 +9,10 @@ import {
   revokeTrustedDevice,
   DEVICE_COOKIE_NAME,
 } from '../../services/auth/trustedDeviceService'
+import { assessRisk, collectRiskSignals, decideAuthRequirement } from '../../services/auth/riskEngine'
+import { recordAdaptiveDecision } from '../../services/auth/anomalyService'
 import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
+import { issueSessionSecret, revokeSessionSecret } from '../../services/auth/hmacService'
 import Wallet from '../../models/user/Wallet'
 import User from '../../models/user/User'
 import { nextTick } from 'node:process'
@@ -137,9 +140,17 @@ export const register = async (req: Request, res: Response) => {
 // 1단계: 이메일 + 비밀번호 검증 → nonce 반환
 export const loginStep1 = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { email, password } = req.body
-    const result = await authService.loginStep1(email, password)
+    const { email, password, honeypot, behaviorData } = req.body
 
+    // 기만 기술: 사람이 아닌 봇(Bot)이 숨김 필드를 채운 경우 즉시 차단
+    if (honeypot && honeypot.length > 0) {
+      return res.status(403).json({
+        code: 'BOT_DETECTED',
+        message: '비정상적인 접근이 감지되었습니다.'
+      })
+    }
+    const result = await authService.loginStep1(email, password)
+    
     // 신뢰 기기 확인
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
     const userAgent = req.headers['user-agent'] || 'unknown'
@@ -153,6 +164,10 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
     res.locals.loginSuccess = true
     res.locals.loginEmail = email
     res.locals.loginUserId = result.userId
+    // 적응형 인증(H) — 위험 점수 판정은 탐지 결과가 나온 뒤라야 하므로
+    // analyzeAfterLogin 에서 수행한다. 여기서는 입력만 넘긴다.
+    res.locals.isTrustedDevice = isTrustedDevice
+    res.locals.behaviorData = behaviorData;
 
     res.locals.responseData = {
       message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
@@ -187,7 +202,7 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
 // 2단계: 지갑 서명 검증 → JWT 발급
 export const loginStep2 = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { userId, walletAddress, signature, rememberDevice, skipSignature } = req.body // ↓ rememberDevice, skipSignature 추가
+    const { userId, walletAddress, signature, rememberDevice } = req.body
 
     const ip =
       (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
@@ -196,13 +211,87 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     const userAgent = req.headers['user-agent'] || 'unknown'
 
+    // 지갑 서명 생략 여부는 클라이언트 요청값(skipSignature)을 신뢰하지 않고 서버가 직접 재검증한다.
+    // 요청 바디의 플래그를 그대로 쓰면 비밀번호만 아는 공격자가 서명 단계를 우회할 수 있다.
+    const rawDeviceToken = req.cookies?.[DEVICE_COOKIE_NAME]
+    const isTrustedDevice = rawDeviceToken
+      ? await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip)
+      : false
+
+    // ── 적응형 인증(H) — 요구 강도를 서버에서 재계산해 강제한다 ──────────
+    //
+    // step1 응답의 requiredAuth 는 **안내용**이다. 클라이언트가 그 값을 낮춰 보내면
+    // 그대로 통과하는 구조가 되면 안 되므로 실제 강제는 여기서 다시 계산한다.
+    // (요청 본문의 skipSignature 를 신뢰해 2단계가 무력화됐던 과거 취약점과 같은 유형)
+    const collected = await collectRiskSignals({ userId, ip, abuseScore: res.locals.abuseScore })
+    const risk = assessRisk(collected.signals)
+    const decision = decideAuthRequirement({
+      isTrustedDevice,
+      risk,
+      degraded: collected.degraded,
+    })
+
+    const denyStepUp = (message: string, code: string) => {
+      res.locals.loginSuccess = false
+      res.locals.loginEmail = req.body.email ?? ''
+      res.locals.responseData = {
+        message,
+        code,
+        requiredAuth: decision.requirement,
+        riskScore: risk.score,
+      }
+      res.locals.responseStatus = 400
+      res.locals.isStep2 = true
+      return next()
+    }
+
+    // ── 단계적 적용 게이트 ────────────────────────────────────────
+    //
+    // 프론트 재인증 화면이 붙었으므로 기본값을 '강제' 로 둔다. 관측만 하려면
+    // ADAPTIVE_AUTH_ENFORCE=false 로 명시적으로 끈다.
+    //
+    // 기본값이 관측일 때 실제로 발생했던 문제: 프론트는 step1 의 requiredAuth 를 보고
+    // 이메일 코드 입력 화면을 띄우는데 서버는 코드를 검증하지 않아, **아무 코드나 넣어도
+    // 로그인이 되는 '인증하는 척하는 화면'** 이 됐다. 안내값과 강제 여부가 갈리면
+    // 언제든 같은 종류의 괴리가 생기므로 기본을 강제로 맞춘다.
+    //
+    // 강제를 꺼도 **기존 정책은 그대로 강제한다.** 미신뢰 기기의 지갑 서명 요구는
+    // 게이트와 무관하게 항상 적용되므로, 꺼져 있어도 기존보다 약해지지 않는다.
+    const enforceAdaptive = process.env.ADAPTIVE_AUTH_ENFORCE !== 'false'
+
+    if (!isTrustedDevice && !signature) {
+      // 기존 정책 — 게이트와 무관하게 항상 적용
+      return denyStepUp('지갑 서명이 필요합니다', 'WALLET_REQUIRED')
+    }
+
+    // 판정 기록 — 관측 모드에서도 남긴다. 강제를 켜기 전에 실제 등급 분포를 모으는 것이
+    // 이 기록의 1차 목적이다. 통과(NONE)는 제외한다(전 로그인이 쌓여 집계가 무의미해짐).
+    // 로그인 응답을 지연시키지 않도록 await 하지 않는다.
+    if (decision.requirement !== 'NONE') {
+      void recordAdaptiveDecision({
+        userId,
+        ip,
+        userAgent,
+        requirement: decision.requirement,
+        score: risk.score,
+        enforced: enforceAdaptive,
+        reason: decision.reason,
+      })
+    }
+
+    if (enforceAdaptive && decision.requirement === 'WALLET' && !signature) {
+      return denyStepUp('지갑 서명이 필요합니다', 'WALLET_REQUIRED')
+    }
+
+
+
     const { user, accessToken, refreshToken } = await authService.loginStep2(
       userId,
       walletAddress,
       signature,
       ip,
       userAgent,
-      skipSignature,
+      isTrustedDevice,
     )
 
     res.cookie('accessToken', accessToken, {
@@ -242,9 +331,13 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
     res.locals.loginEmail = user.email
     res.locals.loginUserId = user.id
 
+    // HMAC 요청서명용 세션 서명키 발급 — 클라이언트가 거래 요청 서명에 사용
+    const signingSecret = issueSessionSecret(user.id)
+
     // return res.status(200).json({
     res.locals.responseData = {
       message: '로그인 성공',
+      signingSecret,
       user: {
         id: user.id,
         email: user.email,
@@ -256,15 +349,16 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
         investment_type_id: user.investment_type_id ?? null,
       },
     }
-    res.locals.resopnseStatus = 200
+    res.locals.responseStatus = 200
+    res.locals.isStep2 = true
     return next() // <- analyzeAfterLogin 으로 넘김
   } catch (error: any) {
     res.locals.loginSuccess = false
     res.locals.loginEmail = req.body.email ?? ''
     res.locals.responseData = { message: error.message }
     res.locals.responseStatus = 400
+    res.locals.isStep2 = true
     return next()
-    //return res.status(400).json({ message: error.message })
   }
 }
 
@@ -289,6 +383,7 @@ export const withdraw = async (req: Request, res: Response) => {
     const userId = (req as any).user.id
     await authService.withdraw(userId)
     await revokeAllTrustedDevices(userId)
+    revokeSessionSecret(userId)
     res.clearCookie('accessToken')
     res.clearCookie('refreshToken')
     res.clearCookie('isLoggedIn')
@@ -459,7 +554,11 @@ export const changePassword = async (req: Request, res: Response) => {
     if (!ok) return res.status(400).json({ message: '현재 비밀번호가 올바르지 않습니다' })
 
     const newHash = await bcrypt.hash(newPassword, 12)
-    await User.update({ password_hash: newHash }, { where: { id: userId } })
+    // 변경 시각을 함께 남긴다 — M-2(계정 정보 변경 직후 고액 거래) 판정의 기준점이다.
+    await User.update(
+      { password_hash: newHash, password_changed_at: new Date() },
+      { where: { id: userId } },
+    )
     return res.status(200).json({ message: '비밀번호가 변경되었습니다' })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })

@@ -5,6 +5,7 @@ import VirtualOrder from '../../models/trade/VirtualOrder'
 import VirtualAccount from '../../models/trade/VirtualAccount'
 import VirtualHolding from '../../models/trade/VirtualHolding'
 import { priceMap } from '../../services/market/KisRealtime'
+import { emitOrderFilled } from '../../services/socket/userChannel'
 
 const FEE_RATE = 0.00015
 const INTERVAL_MS = 5000
@@ -104,8 +105,22 @@ const fillLimitOrder = async (order: PendingOrderRow): Promise<void> => {
             await account.update({ seed_balance: Number(account.seed_balance) + proceeds }, { transaction: t })
         }
 
-        await dbOrder.update({ status: 'filled', filled_at: new Date() }, { transaction: t })
+        const filledAt = new Date()
+        await dbOrder.update({ status: 'filled', filled_at: filledAt }, { transaction: t })
         await t.commit()
+
+        // 커밋 이후에 알린다 — 롤백된 거래를 체결로 알리면 안 된다.
+        // 개인 데이터이므로 브로드캐스트가 아니라 주문자 채널로만 보낸다.
+        emitOrderFilled(order.user_id, {
+            orderId: order.id,
+            stockCode: order.stock_code,
+            side: order.side,
+            quantity: order.quantity,
+            price: Number(order.price),
+            totalAmount: Number(order.total_amount),
+            filledAt: filledAt.toISOString(),
+        })
+
         console.log(
             `[LimitScheduler] 주문 ${order.id} 체결 — ${order.side} ${order.quantity}주 @ ₩${Number(order.price).toLocaleString()}`
         )

@@ -142,7 +142,7 @@ export const validateLoginStep2 = (
   res: Response,
   next: NextFunction,
 ) => {
-  const { userId, walletAddress, signature, skipSignature } = req.body
+  const { userId, walletAddress, signature } = req.body
 
   if (!userId || !walletAddress) {
     return res.status(400).json({ message: '필수 항목을 모두 입력해주세요' })
@@ -153,14 +153,10 @@ export const validateLoginStep2 = (
   if (!isValidWalletAddress(walletAddress)) {
     return res.status(400).json({ message: '올바른 지갑 주소를 입력해주세요' })
   }
-  // 신뢰 기기 스킵 시 signature 검증 제외
-  if (!skipSignature) {
-    if (!signature) {
-      return res.status(400).json({ message: '필수 항목을 모두 입력해주세요' })
-    }
-    if (!isValidSignature(signature)) {
-      return res.status(400).json({ message: '올바른 서명값이 아닙니다' })
-    }
+  // 서명 "필요 여부"는 신뢰 기기 재검증 결과로 컨트롤러가 판단한다(클라이언트 플래그를 믿지 않음).
+  // 검증 계층에서는 값이 전달된 경우의 형식만 확인한다.
+  if (signature && !isValidSignature(signature)) {
+    return res.status(400).json({ message: '올바른 서명값이 아닙니다' })
   }
 
   next()

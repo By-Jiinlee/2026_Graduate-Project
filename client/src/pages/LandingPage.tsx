@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { io, Socket } from 'socket.io-client'
 import {
   LineChart,
@@ -9,6 +8,8 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
+
+import { SOCKET_URL } from '../utils/api'
 
 // ─── 타입 ─────────────────────────────────────────────────────
 
@@ -21,6 +22,8 @@ interface IndexData {
   market: 'KR' | 'US'
   delayed?: boolean
 }
+
+type Timeframe = '1D' | '1M' | '3M' | '6M' | '1Y'
 
 // ─── 초기 지수 데이터 ─────────────────────────────────────────
 
@@ -50,11 +53,29 @@ const formatChangeRate = (changeRate: number): string => {
   return `${absRate}%`
 }
 
-// ─── 날짜 계산 유틸 ───────────────────────────────────────────
+// ─── 날짜 계산 유틸 (기간 탭 지원) ─────────────────────────────
 
-const getFormattedDates = (isUS: boolean = false) => {
-  const today = new Date()
-  const lastYear = new Date(today.getFullYear() - 1, today.getMonth(), today.getDate())
+const getFormattedDates = (isUS: boolean = false, timeframe: Timeframe = '1Y') => {
+  const toDate = new Date()
+  const fromDate = new Date()
+
+  switch (timeframe) {
+    case '1D':
+      fromDate.setDate(toDate.getDate() - 1) // 1일 전
+      break
+    case '1M':
+      fromDate.setMonth(toDate.getMonth() - 1) // 1개월 전
+      break
+    case '3M':
+      fromDate.setMonth(toDate.getMonth() - 3) // 3개월 전
+      break
+    case '6M':
+      fromDate.setMonth(toDate.getMonth() - 6) // 6개월 전
+      break
+    case '1Y':
+      fromDate.setFullYear(toDate.getFullYear() - 1) // 1년 전
+      break
+  }
 
   const formatDate = (date: Date) => {
     const yyyy = date.getFullYear()
@@ -64,8 +85,8 @@ const getFormattedDates = (isUS: boolean = false) => {
   }
 
   return {
-    from: formatDate(lastYear),
-    to: formatDate(today),
+    from: formatDate(fromDate),
+    to: formatDate(toDate),
   }
 }
 
@@ -73,18 +94,28 @@ const getFormattedDates = (isUS: boolean = false) => {
 
 interface ChartProps {
   indexType: 'KOSPI' | 'KOSDAQ' | 'SP500' | 'NASDAQ' | 'DOW'
+  color?: string
 }
 
-const IndexChart = ({ indexType }: ChartProps) => {
+const IndexChart = ({ indexType, color = '#22C55E' }: ChartProps) => {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [timeframe, setTimeframe] = useState<Timeframe>('1Y')
+
+  const timeframes: { label: string; value: Timeframe }[] = [
+    { label: '1일', value: '1D' },
+    { label: '1개월', value: '1M' },
+    { label: '3개월', value: '3M' },
+    { label: '6개월', value: '6M' },
+    { label: '1년', value: '1Y' },
+  ]
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true)
         const isUS = ['SP500', 'NASDAQ', 'DOW'].includes(indexType)
-        const { from, to } = getFormattedDates(isUS)
+        const { from, to } = getFormattedDates(isUS, timeframe)
         
         let endpoint = ''
         switch (indexType) {
@@ -98,11 +129,9 @@ const IndexChart = ({ indexType }: ChartProps) => {
         const response = await fetch(endpoint)
         const result = await response.json()
 
-        // API 구조 반영: result.data 배열 안에서 time_period와 value 추출
         const rawData = result.data || []
 
         const formattedData = rawData.map((item: any) => {
-          // 날짜 포맷 (20240418 -> 2024-04-18 형식으로 정리)
           let displayDate = item.time_period
           if (displayDate && !displayDate.includes('-') && displayDate.length === 8) {
             displayDate = `${displayDate.slice(0, 4)}-${displayDate.slice(4, 6)}-${displayDate.slice(6, 8)}`
@@ -123,59 +152,87 @@ const IndexChart = ({ indexType }: ChartProps) => {
     }
 
     fetchData()
-  }, [indexType])
+  }, [indexType, timeframe])
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-        데이터를 불러오는 중...
-      </div>
-    )
-  }
-  
-  if (data.length === 0) {
-    return (
-      <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-        데이터가 없습니다.
-      </div>
-    )
-  }
-
-  // 지수 값의 최소/최대 범위를 계산하여 그래프 상하 여백을 조정
-  const minVal = Math.min(...data.map(d => d.value))
-  const maxVal = Math.max(...data.map(d => d.value))
+  // 최소/최대 범위 계산
+  const minVal = data.length > 0 ? Math.min(...data.map(d => d.value)) : 0
+  const maxVal = data.length > 0 ? Math.max(...data.map(d => d.value)) : 100
   const offset = (maxVal - minVal) * 0.1 
 
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-        <XAxis dataKey="date" hide />
-        <YAxis 
-          domain={[minVal - offset, maxVal + offset]} 
-          hide 
-        />
-        {/* 타입스크립트 에러 해결: (value: any)로 변경하고 타입 체크 로직 추가 */}
-        <Tooltip 
-          contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', fontSize: '13px' }}
-          labelStyle={{ color: '#666', marginBottom: '4px' }}
-          itemStyle={{ color: '#111', fontWeight: 'bold' }}
-          formatter={(value: any) => [
-            typeof value === 'number' 
-              ? value.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) 
-              : value, 
-            '지수'
-          ]}
-        />
-        <Line 
-          type="monotone" 
-          dataKey="value" 
-          stroke="#22C55E" 
-          strokeWidth={2} 
-          dot={false} 
-          activeDot={{ r: 4, strokeWidth: 0 }}
-        />
-      </LineChart>
-    </ResponsiveContainer>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* 차트 상단: 타이틀 & 기간 선택 탭 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <h3 style={{ fontSize: '16px', color: '#111', margin: 0, fontWeight: 'bold' }}>
+          {indexType} 추이
+        </h3>
+        <div style={{ display: 'flex', gap: '4px', backgroundColor: '#f3f4f6', padding: '4px', borderRadius: '8px' }}>
+          {timeframes.map((tf) => (
+            <button
+              key={tf.value}
+              onClick={() => setTimeframe(tf.value)}
+              style={{
+                border: 'none',
+                background: timeframe === tf.value ? '#ffffff' : 'transparent',
+                color: timeframe === tf.value ? '#111' : '#888',
+                fontWeight: timeframe === tf.value ? 'bold' : 'normal',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '12px',
+                cursor: 'pointer',
+                boxShadow: timeframe === tf.value ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                transition: 'all 0.2s',
+              }}
+            >
+              {tf.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 차트 영역 */}
+      <div style={{ flex: 1, width: '100%', position: 'relative' }}>
+        {loading ? (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999', backgroundColor: 'rgba(255,255,255,0.7)', zIndex: 10 }}>
+            데이터를 불러오는 중...
+          </div>
+        ) : data.length === 0 ? (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+            데이터가 없습니다.
+          </div>
+        ) : null}
+
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <XAxis dataKey="date" hide />
+            <YAxis 
+              domain={[minVal - offset, maxVal + offset]} 
+              hide 
+            />
+            <Tooltip 
+              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', fontSize: '13px' }}
+              labelStyle={{ color: '#666', marginBottom: '4px' }}
+              itemStyle={{ color: color, fontWeight: 'bold' }}
+              formatter={(value: any) => [
+                typeof value === 'number' 
+                  ? value.toLocaleString('ko-KR', { maximumFractionDigits: 2 }) 
+                  : value, 
+                '지수'
+              ]}
+            />
+            <Line 
+              type="monotone" 
+              dataKey="value" 
+              stroke={color} 
+              strokeWidth={2} 
+              dot={false} 
+              activeDot={{ r: 4, strokeWidth: 0 }}
+              animationDuration={300}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
   )
 }
 
@@ -186,7 +243,7 @@ export default function LandingPage(): React.ReactElement {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    const socket: Socket = io('http://localhost:3000', {
+    const socket: Socket = io(SOCKET_URL, {
       transports: ['websocket'],
     })
 
@@ -241,8 +298,6 @@ export default function LandingPage(): React.ReactElement {
             실시간 시장 데이터와 AI 분석으로
             <br />더 스마트한 투자를 시작하세요.
           </p>
-
-
         </div>
 
         {/* 오른쪽 이미지 */}
@@ -287,7 +342,6 @@ export default function LandingPage(): React.ReactElement {
 
           return (
             <div key={code} style={{ textAlign: 'left', minWidth: '120px' }}>
-              {/* 지수명 */}
               <div style={{ fontSize: '13px', color: '#888', marginBottom: '4px' }}>
                 {item.name}
                 {item.delayed && (
@@ -297,7 +351,6 @@ export default function LandingPage(): React.ReactElement {
                 )}
               </div>
 
-              {/* 현재가 */}
               <div
                 style={{
                   fontSize: '22px',
@@ -309,7 +362,6 @@ export default function LandingPage(): React.ReactElement {
                 {formatPrice(item.price)}
               </div>
 
-              {/* 화살표 + % */}
               {hasData ? (
                 <div
                   style={{
@@ -330,7 +382,6 @@ export default function LandingPage(): React.ReactElement {
           )
         })}
 
-        {/* 연결 상태 */}
         <div style={{ position: 'absolute', right: '24px', top: '12px' }}>
           <span
             style={{
@@ -346,7 +397,7 @@ export default function LandingPage(): React.ReactElement {
 
       {/* 시장 정보 섹션 */}
       <section style={{ padding: '60px 120px' }}>
-        <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '32px' }}>
+        <h2 style={{ fontSize: '24px', fontWeight: 'bold', marginBottom: '32px', color: '#111' }}>
           시장 정보
         </h2>
         <div style={{ display: 'flex', gap: '24px' }}>
@@ -354,43 +405,29 @@ export default function LandingPage(): React.ReactElement {
           <div
             style={{
               flex: 1,
-              height: '240px',
+              height: '300px', // 탭 버튼이 들어갈 공간을 위해 높이 살짝 늘림
               backgroundColor: '#ffffff',
               borderRadius: '12px',
               border: '1px solid #eee',
               padding: '24px',
-              display: 'flex',
-              flexDirection: 'column',
               boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
             }}
           >
-            <h3 style={{ fontSize: '16px', color: '#111', marginBottom: '16px', margin: 0 }}>
-              KOSPI 추이 (최근 1년)
-            </h3>
-            <div style={{ flex: 1, width: '100%', overflow: 'hidden' }}>
-              <IndexChart indexType="KOSPI" />
-            </div>
+            <IndexChart indexType="KOSPI" color="#22C55E" />
           </div>
 
           <div
             style={{
               flex: 1,
-              height: '240px',
+              height: '300px',
               backgroundColor: '#ffffff',
               borderRadius: '12px',
               border: '1px solid #eee',
               padding: '24px',
-              display: 'flex',
-              flexDirection: 'column',
               boxShadow: '0 2px 10px rgba(0,0,0,0.02)'
             }}
           >
-            <h3 style={{ fontSize: '16px', color: '#111', marginBottom: '16px', margin: 0 }}>
-              KOSDAQ 추이 (최근 1년)
-            </h3>
-            <div style={{ flex: 1, width: '100%', overflow: 'hidden' }}>
-              <IndexChart indexType="KOSDAQ" />
-            </div>
+            <IndexChart indexType="KOSDAQ" color="#3B82F6" />
           </div>
 
         </div>

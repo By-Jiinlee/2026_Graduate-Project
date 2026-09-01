@@ -6,23 +6,16 @@ import {
     getStockDetail,
     getMinuteCandles,
     getRealtimeStatusController,
+    getKisHistory,
 } from '../../controllers/market/StockPrice'
 
 const router = Router()
 
-/**
- * [GET] 전체 종목의 최신 시세 리스트 조회
- * 주소: GET /api/market/stock-prices/all
- * 주의: /:stockId 라우트보다 반드시 위에 있어야 'all'을 ID로 인식하지 않습니다.
- */
 router.get('/all', getAllLatestPrices)
 router.get('/realtime-status', getRealtimeStatusController)
 
-/**
- * [GET] 특정 종목의 기간별 상세 시세 조회
- * 주소: GET /api/market/stock-prices/:stockId?from=YYYY-MM-DD&to=YYYY-MM-DD
- */
 router.get('/:stockId/detail', getStockDetail)
+router.get('/:stockId/history', getKisHistory)  // KIS 직접 조회 (D/W/M)
 router.get('/:stockId/minute', getMinuteCandles)
 router.get('/:stockId', getStockPrices)
 

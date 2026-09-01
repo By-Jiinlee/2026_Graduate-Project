@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface Props {
   title: string
@@ -11,23 +11,28 @@ const KEYS = ['1','2','3','4','5','6','7','8','9','','0','⌫']
 
 export default function PinPad({ title, subtitle, onConfirm, onCancel }: Props) {
   const [pin, setPin] = useState('')
-  const [shake, setShake] = useState(false)
-
-  // 6자리 채워지면 자동 제출
-  useEffect(() => {
-    if (pin.length === 6) {
-      onConfirm(pin)
-    }
-  }, [pin])
+  const submitted = useRef(false)
 
   const handleKey = (k: string) => {
-    if (k === '') return
+    if (k === '' || submitted.current) return
     if (k === '⌫') {
       setPin(p => p.slice(0, -1))
       return
     }
-    if (pin.length < 6) {
-      setPin(p => p + k)
+    if (pin.length >= 6) return
+
+    const next = pin + k
+    setPin(next)
+
+    // 6자리가 채워지면 그 자리에서 제출한다.
+    //
+    // 예전에는 useEffect([pin]) 에서 제출했는데, effect 는 커밋 이후 비동기로 돌아
+    // 부모가 PinPad 를 key 로 재마운트하는 타이밍과 겹쳤다. StrictMode 의 effect
+    // 이중 실행까지 얹히면 제출이 두 번 불리거나 단계 전이가 어긋날 수 있다.
+    // 입력 시점에 직접 부르면 그 경로가 통째로 사라진다.
+    if (next.length === 6) {
+      submitted.current = true
+      onConfirm(next)
     }
   }
 
@@ -40,7 +45,6 @@ export default function PinPad({ title, subtitle, onConfirm, onCancel }: Props) 
 
   return (
     <div
-      onClick={onCancel}
       style={{
         position: 'fixed',
         inset: 0,
@@ -53,7 +57,6 @@ export default function PinPad({ title, subtitle, onConfirm, onCancel }: Props) 
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
         style={{
           backgroundColor: '#fff',
           borderRadius: '24px',

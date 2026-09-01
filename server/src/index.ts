@@ -7,10 +7,19 @@ import helmet from 'helmet'
 import cookieParser from 'cookie-parser'
 import morgan from 'morgan'
 import { connectDB } from './config/database'
+import { corsOptions, socketCorsOptions, describeCorsPolicy } from './config/cors'
+import { initUserChannels } from './services/socket/userChannel'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
+import honeypotRouter from './routes/security/honeypotRouter'
+import adminRouter from './routes/security/adminRouter'
+import { ipBlockMiddleware } from './middleware/security/ipBlockMiddleware'
 import virtualTradeRouter from './routes/trade/virtualTradeRouter'
+import tradePinRouter from './routes/trade/tradePinRouter'
+import realTradeRouter from './routes/trade/realTradeRouter'
 import surveyRouter from './routes/user/surveyRouter'
+import userRouter from './routes/user/userRouter'
+import predictionRouter from './routes/ai/predictionRouter'
 
 // 스케줄러
 import stockPriceRouter from './routes/market/StockPrice'
@@ -34,31 +43,36 @@ dotenv.config()
 
 const app = express()
 const httpServer = createServer(app)
-const io = new Server(httpServer, {
-    cors: {
-        origin: 'http://localhost:5173',
-        credentials: true,
-    },
-})
+const io = new Server(httpServer, { cors: socketCorsOptions })
+// 개인 이벤트(체결 알림 등)를 위한 사용자별 채널 — 쿠키 JWT 로 방을 배정한다.
+initUserChannels(io)
 const PORT = process.env.PORT || 3000
 
 // 미들웨어
-app.use(express.json())
+// HMAC 요청서명 검증을 위해 raw body를 보존 (서명 재계산 시 파싱 전 원본 필요)
+app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf.toString('utf8') } }))
 app.use(express.urlencoded({ extended: true }))
 app.use(cookieParser())
 app.use(morgan('dev'))
 app.use(helmet())
 app.set('trust proxy', true) // 이상탐지 테스트용
-app.use(cors({
-    origin: 'http://localhost:5173',
-    credentials: true,
-}))
+app.use(cors(corsOptions))
+
+// 보안 미들웨어 — 모든 라우터보다 먼저 실행
+app.use(ipBlockMiddleware)  // 인메모리 IP 차단 목록 검사
+app.use(honeypotRouter)     // 허니팟 경로 탐지
 
 // 라우터
 app.use('/api/auth', authRouter)
+app.use('/api/admin/security', adminRouter)
 app.use('/api/test', contractTestRouter)
+// 거래 PIN 은 모의투자·실거래 공용이라 어느 한쪽 라우터에도 두지 않는다.
+app.use('/api/trade/pin', tradePinRouter)
 app.use('/api/trade/virtual', virtualTradeRouter)
+app.use('/api/trade/real', realTradeRouter)
 app.use('/api/survey', surveyRouter)
+app.use('/api/user', userRouter)
+app.use('/api/ai', predictionRouter)
 
 // 스케줄러 라우터
 app.use('/api/market/stock-prices', stockPriceRouter)
@@ -70,8 +84,9 @@ connectDB()
 // 서버 실행
 httpServer.listen(PORT, () => {
     console.log(`서버 실행 중 : http://localhost:${PORT}`)
+    console.log(describeCorsPolicy())
     // 1단계
-    //startStockPriceScheduler() //일봉
+    startStockPriceScheduler() //일봉
     //startMarketIndexScheduler() //미국주요지수
 
 // 2단계

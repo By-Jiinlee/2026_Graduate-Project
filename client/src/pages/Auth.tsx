@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { API_BASE } from '../utils/api'
 import { Link, useNavigate } from 'react-router-dom'; // 페이지 이동을 위해 추가
 
 export default function Auth() {
@@ -13,22 +14,22 @@ export default function Auth() {
     setErrorMessage(''); // 새로운 요청 시 에러 초기화
 
     try {
-      const response = await fetch('http://localhost:3000/api/auth/login', {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
 
       if (response.ok) {
-        const data = await response.json();
+        await response.json();
         alert('UpTick에 오신 것을 환영합니다!');
 
         // 성공 시 메인 페이지('/')로 이동합니다.
         // localStorage.setItem('token', data.token); // 나중에 토큰 저장할 때 주석 해제
         navigate('/'); 
       } else {
-        const data = await response.json();
-        setErrorMessage(data.message || '이메일 또는 비밀번호가 올바르지 않습니다.');
+    const data = await response.json(); // <-- const data로 다시 담아줍니다!
+    setErrorMessage(data.message || '로그인에 실패했습니다. 이메일과 비밀번호를 확인해주세요.');
       }
     } catch (error) {
       setErrorMessage('서버와 연결할 수 없습니다. 백엔드 서버가 켜져 있는지 확인해주세요.');

@@ -1,106 +1,168 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
+import { setSigningSecret } from '../utils/tradeSigning'
+import { API_BASE } from '../utils/api'
+import { useBehaviorTracker } from '../hooks/useBehaviorTracker'
 
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [step, setStep] = useState(1)
-  const [loginData, setLoginData] = useState<{
-    userId: number
-    walletAddress: string
-    nonce: string
-    isTrustedDevice?: boolean
-    requireWalletSign?: boolean
-  } | null>(null)
+  const [honeypot, setHoneypot] = useState('') // 기만 기술(Honeypot) 상태 추가
+  const [step, setStep] = useState(1) // 1: 이메일·비밀번호, 2: 지갑 서명
+  const { getBehaviorData } = useBehaviorTracker() // 사용자 행동 데이터 추적 훅
+
+  // 2차 인증 수단은 온체인 지갑 서명 하나뿐이다 — PIN·이메일 코드 폴백을 두지 않는다.
+  // 폴백이 존재하면 "그 폴백을 고르는 것" 이 곧 가장 약한 우회 경로가 되기 때문이다.
+  const [loginData, setLoginData] = useState<any>(null)
+  const [rememberDevice, setRememberDevice] = useState(false)
+  const [signing, setSigning] = useState(false)
+
   const [error, setError] = useState('')
-  const navigate = useNavigate()
 
   // ─── 로그인 1단계 ─────────────────────────────────────────────
   const handleLoginStep1 = async () => {
-  try {
-    setError('')
-    const res = await fetch('http://localhost:3000/api/auth/login/step1', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email, password }),
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.message)
-
-    setLoginData(data)
-
-    if (data.isTrustedDevice) {
-      // 신뢰 기기 → MetaMask 없이 자동 step2
-      const res2 = await fetch('http://localhost:3000/api/auth/login/step2', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ userId: data.userId, walletAddress: data.walletAddress, signature: '', skipSignature: true }),
-      })
-      const data2 = await res2.json()
-      if (!res2.ok) throw new Error(data2.message)
-      localStorage.setItem('loginTime', Date.now().toString())
-      localStorage.setItem('upTick_user', JSON.stringify(data2.user))
-      window.location.href = data2.user?.is_survey_completed ? '/' : '/survey'
-    } else {
-      setStep(2)
-    }
-  } catch (err: any) {
-    setError(err.message)
-  }
-}
-
-  // ─── 로그인 2단계 ─────────────────────────────────────────────
-  const handleLoginStep2 = async () => {
     try {
       setError('')
-      if (!window.ethereum) throw new Error('MetaMask가 설치되어 있지 않습니다')
-      if (!loginData) throw new Error('로그인 정보가 없습니다')
-
-      const accounts = await window.ethereum.request({
-        method: 'eth_requestAccounts',
+      const deviceFingerprint = localStorage.getItem('device_fingerprint') || 'unknown'
+      const behaviorData = getBehaviorData()// 현재까지 수집된 마우스/키보드 행동 데이터를 가져옴
+      
+      const res = await fetch(`${API_BASE}/api/auth/login/step1`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Device-Fingerprint': deviceFingerprint
+        },
+        credentials: 'include',
+        body: JSON.stringify({ email, password, honeypot, behaviorData }), // body에 behaviorData를 추가
       })
-      const address = accounts[0]
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message)
 
-      // 백엔드 buildAuthMessage와 동일한 메시지 생성
+      setLoginData(data)
+
+      // 서버가 내려주는 requiredAuth 는 'NONE'(통과) 아니면 'WALLET'(지갑 서명) 둘뿐이다.
+      // 값이 없는 구버전 응답이면 신뢰 기기 여부로 판단한다.
+      const authType: string = data.requiredAuth ?? (data.isTrustedDevice ? 'NONE' : 'WALLET')
+
+      if (authType === 'NONE') {
+        // 신뢰 기기 + 위험 신호 없음 → 서명 없이 바로 2단계
+        await executeStep2({
+          userId: data.userId,
+          walletAddress: data.walletAddress,
+          signature: '',
+        })
+      } else {
+        setStep(2)
+      }
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
+
+  // ─── 로그인 2단계 공통 실행 함수 ─────────────────────────────────────────────
+  const executeStep2 = async (payload: { userId: number; walletAddress: string; signature?: string; rememberDevice?: boolean }) => {
+    try {
+      setError('')
+      const deviceFingerprint = localStorage.getItem('device_fingerprint') || 'unknown'
+      const res = await fetch(`${API_BASE}/api/auth/login/step2`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Device-Fingerprint': deviceFingerprint // 헤더에 기기 지문 값 추가
+        },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        // 서버가 재인증을 요구했다 — 서명 화면으로 넘긴다.
+        // (신뢰 기기로 통과하려던 요청이 위험 신호로 승격된 경우)
+        if (data.code === 'WALLET_REQUIRED') setStep(2)
+        throw new Error(data.message)
+      }
+
+      // 로그인 성공 처리
+      if (data.signingSecret) setSigningSecret(data.signingSecret)
+      localStorage.setItem('loginTime', Date.now().toString())
+      localStorage.setItem('upTick_user', JSON.stringify(data.user))
+
+      const targetUrl = data.user?.is_survey_completed ? '/' : '/survey'
+      window.location.href = targetUrl
+
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
+
+  // ─── 지갑 서명 제출 ─────────────────────────────────────────────
+  const handleWalletSign = async () => {
+    if (!loginData || signing) return
+
+    setError('')
+    setSigning(true)
+    try {
+      if (!window.ethereum) {
+        setError('MetaMask가 설치되어 있지 않습니다. 확장 프로그램을 설치한 뒤 다시 시도해주세요.')
+        return
+      }
+
+      const accounts: string[] = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      const address = accounts?.[0]
+      if (!address) {
+        setError('MetaMask에서 계정을 선택해주세요.')
+        return
+      }
+
+      // 서명 요청 전에 계정을 대조한다.
+      //
+      // MetaMask 에 여러 계정이 있으면 현재 선택된 계정이 가입 때 등록한 지갑과 다를 수 있다.
+      // 그대로 서명하면 서버의 온체인 검증이 실패해 "서명이 올바르지 않습니다" 로만 떨어져,
+      // 사용자는 무엇을 고쳐야 하는지 알 수 없다. 여기서 미리 잡아 계정 전환을 안내한다.
+      const registered = String(loginData.walletAddress ?? '')
+      if (address.toLowerCase() !== registered.toLowerCase()) {
+        setError(
+          `MetaMask에 선택된 지갑 주소가 등록된 주소와 다릅니다.
+` +
+            `등록된 주소: ${registered.slice(0, 6)}...${registered.slice(-4)}
+` +
+            `현재 선택된 주소: ${address.slice(0, 6)}...${address.slice(-4)}
+` +
+            `MetaMask에서 등록된 계정으로 전환한 뒤 다시 시도해주세요.`,
+        )
+        return
+      }
+
       const { keccak256, concat, toBytes, getAddress } = await import('viem')
-
       const CONTRACT_ADDRESS = '0xe7BBeA01683414DEd829f08e8d6822eF0CD7a38a'
-      const CHAIN_ID = BigInt(11155111) // Sepolia
+      const CHAIN_ID = BigInt(11155111)
 
       const innerHash = keccak256(
         concat([
           toBytes(CHAIN_ID, { size: 32 }),
           toBytes(getAddress(CONTRACT_ADDRESS), { size: 20 }),
-          toBytes(getAddress(loginData.walletAddress), { size: 20 }),
+          toBytes(getAddress(registered), { size: 20 }),
           toBytes(BigInt(loginData.nonce), { size: 32 }),
-        ]),
+        ])
       )
 
-      const signature = await window.ethereum.request({
+      const signature: string = await window.ethereum.request({
         method: 'personal_sign',
         params: [innerHash, address],
       })
 
-      const res = await fetch('http://localhost:3000/api/auth/login/step2', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          userId: loginData.userId,
-          walletAddress: loginData.walletAddress,
-          signature,
-        }),
+      await executeStep2({
+        userId: loginData.userId,
+        walletAddress: registered,
+        signature,
+        rememberDevice,
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.message)
-      localStorage.setItem('loginTime', Date.now().toString())
-      localStorage.setItem('upTick_user', JSON.stringify(data.user))
-      window.location.href = data.user?.is_survey_completed ? '/' : '/survey'
-
     } catch (err: any) {
-      setError(err.message)
+      // MetaMask 사용자가 서명 창을 닫은 경우(4001)는 오류가 아니라 취소다.
+      if (err?.code === 4001) setError('서명이 취소되었습니다. 로그인하려면 서명이 필요합니다.')
+      else setError(err?.message ?? '지갑 서명에 실패했습니다.')
+    } finally {
+      setSigning(false)
     }
   }
 
@@ -128,47 +190,21 @@ export default function Login() {
   }
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#f9fafb',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontFamily: 'sans-serif',
-      }}
-    >
-      <div
-        style={{
-          backgroundColor: '#fff',
-          borderRadius: '20px',
-          padding: '48px 40px',
-          width: '400px',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
-        }}
-      >
+    <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif' }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: '20px', padding: '48px 40px', width: '400px', boxShadow: '0 4px 20px rgba(0,0,0,0.08)', position: 'relative' }}>
+        
         {/* 로고 */}
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <span
-            style={{ fontSize: '28px', fontWeight: 'bold', color: '#3CB371' }}
-          >
-            UpTick
-          </span>
+          <span style={{ fontSize: '28px', fontWeight: 'bold', color: '#3CB371' }}>UpTick</span>
           <span style={{ fontSize: '22px', marginLeft: '6px' }}>📈</span>
-          <p style={{ fontSize: '14px', color: '#888', marginTop: '8px' }}>
-            투자의 기준을 높이다
-          </p>
+          <p style={{ fontSize: '14px', color: '#888', marginTop: '8px' }}>투자의 기준을 높이다</p>
         </div>
 
         {error && (
-          <p
-            style={{
-              fontSize: '13px',
-              color: '#e53935',
-              marginBottom: '12px',
-              textAlign: 'center',
-            }}
-          >
+          <p style={{
+            fontSize: '13px', color: '#e53935', marginBottom: '12px', textAlign: 'center',
+            whiteSpace: 'pre-line', lineHeight: 1.6,
+          }}>
             {error}
           </p>
         )}
@@ -176,77 +212,65 @@ export default function Login() {
         {/* Step 1 - 이메일 + 비밀번호 */}
         {step === 1 && (
           <>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '14px',
-                marginBottom: '24px',
-              }}
-            >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
+              {/* [추가] 기만 기술 (Honeypot) - 봇만 입력하도록 유도하는 숨김 필드 */}
+              <input
+                type="text"
+                value={honeypot}
+                onChange={(e) => setHoneypot(e.target.value)}
+                style={{ display: 'none' }}
+                tabIndex={-1}
+                autoComplete="off" // TODO: 최신 브라우저 정책(자동완성 강제)으로 인해 기능 임시 보류
+              />
+              
               <div>
-                <label
-                  style={{
-                    fontSize: '13px',
-                    color: '#555',
-                    fontWeight: '600',
-                    display: 'block',
-                    marginBottom: '6px',
-                  }}
-                >
-                  이메일
-                </label>
-                <input
-                  type="email"
-                  placeholder="이메일을 입력하세요"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  style={inputStyle}
-                />
+                <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>이메일</label>
+                <input type="email" placeholder="이메일을 입력하세요" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
               </div>
               <div>
-                <label
-                  style={{
-                    fontSize: '13px',
-                    color: '#555',
-                    fontWeight: '600',
-                    display: 'block',
-                    marginBottom: '6px',
-                  }}
-                >
-                  비밀번호
-                </label>
-                <input
-                  type="password"
-                  placeholder="비밀번호를 입력하세요"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLoginStep1()}
-                  style={inputStyle}
+                <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>비밀번호</label>
+                <input 
+                  type="password" 
+                  placeholder="비밀번호를 입력하세요" 
+                  value={password} 
+                  onChange={(e) => setPassword(e.target.value)} 
+                  onKeyDown={(e) => e.key === 'Enter' && handleLoginStep1()} 
+                  style={inputStyle} 
+                  autoComplete="new-password" // TODO: 최신 브라우저 정책(자동완성 강제)으로 인해 기능 임시 보류
+                  readOnly={true}
+                  onFocus={(e) => e.target.removeAttribute('readonly')}
+                  onCopy={(e) => { e.preventDefault(); alert("보안상 복사할 수 없습니다."); }}
+                  onPaste={(e) => { e.preventDefault(); alert("보안상 붙여넣기를 지원하지 않습니다. 직접 입력해주세요."); }}
                 />
               </div>
             </div>
-            <button onClick={handleLoginStep1} style={btnStyle}>
-              로그인
-            </button>
+            <button onClick={handleLoginStep1} style={btnStyle}>로그인</button>
           </>
         )}
 
-        {/* Step 2 - MetaMask 서명 */}
+        {/* Step 2 - 온체인 지갑 서명 (2차 인증 수단은 이것 하나뿐) */}
         {step === 2 && (
           <>
-            <p
-              style={{
-                fontSize: '14px',
-                color: '#555',
-                marginBottom: '24px',
-                textAlign: 'center',
-              }}
+            <div style={{ marginBottom: '24px', textAlign: 'center' }}>
+              <p style={{ fontSize: '15px', fontWeight: 'bold', color: '#333', marginBottom: '8px' }}>
+                안전을 위해 본인 확인이 필요합니다
+              </p>
+              <p style={{ fontSize: '13px', color: '#666', lineHeight: 1.6 }}>
+                가입 시 등록한 MetaMask 지갑으로 서명해 주세요.
+              </p>
+
+              <div style={{ marginTop: '16px', textAlign: 'left', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input type="checkbox" id="remember" checked={rememberDevice} onChange={(e) => setRememberDevice(e.target.checked)} />
+                <label htmlFor="remember" style={{ color: '#555', cursor: 'pointer' }}>이 기기 기억하기</label>
+              </div>
+            </div>
+
+            <button
+              onClick={handleWalletSign}
+              disabled={signing}
+              style={{ ...btnStyle, opacity: signing ? 0.6 : 1, cursor: signing ? 'default' : 'pointer' }}
             >
-              MetaMask로 서명해주세요.
-            </p>
-            <button onClick={handleLoginStep2} style={btnStyle}>
-              MetaMask 서명
+              {signing ? '서명 대기 중…' : 'MetaMask 서명'}
             </button>
           </>
         )}
@@ -254,23 +278,7 @@ export default function Login() {
         {/* 하단 링크 */}
         <div style={{ textAlign: 'center', fontSize: '13px', color: '#888' }}>
           아직 계정이 없으신가요?{' '}
-          <Link
-            to="/register"
-            style={{
-              color: '#3CB371',
-              fontWeight: '600',
-              textDecoration: 'none',
-            }}
-          >
-            회원가입
-          </Link>
-        </div>
-        <div
-          style={{ textAlign: 'center', marginTop: '12px', fontSize: '13px' }}
-        >
-          <Link to="/" style={{ color: '#aaa', textDecoration: 'none' }}>
-            비밀번호를 잊으셨나요?
-          </Link>
+          <Link to="/register" style={{ color: '#3CB371', fontWeight: '600', textDecoration: 'none' }}>회원가입</Link>
         </div>
       </div>
     </div>

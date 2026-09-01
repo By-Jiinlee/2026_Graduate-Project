@@ -1,40 +1,88 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useEffect, useState, useRef } from 'react';
-import { type Post as BasePost, type Comment } from '../data/mockPosts';
+import { useEffect, useState, useRef, type ChangeEvent } from 'react';
 
-// 1. 기존 Post 타입을 확장하여 imageUrl 속성을 강제로 인식시킵니다.
-interface Post extends BasePost {
+import { API_BASE } from '../utils/api'
+
+export interface Comment {
+  id: number;
+  author: string;
+  content: string;
+  date: string;
+  imageUrl?: string;
+  replies?: Comment[];
+}
+
+export interface Post {
+  id: number;
+  title: string;
+  author: string;
+  date: string;
+  views: number;
+  likes: number;
+  category: string;
+  content: string;
+  comments: Comment[];
   imageUrl?: string;
 }
 
 export default function PostDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  // 2. 위에서 정의한 새로운 Post 타입을 사용합니다.
   const [post, setPost] = useState<Post | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const hasIncremented = useRef(false);
 
-  const [commentAuthor, setCommentAuthor] = useState('');
   const [commentContent, setCommentContent] = useState('');
+  const [commentImage, setCommentImage] = useState('');
+  const [isCommentSubmitting, setIsCommentSubmitting] = useState(false);
+  
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyContent, setReplyContent] = useState('');
+  const [replyImage, setReplyImage] = useState('');
+
+  const [nickname, setNickname] = useState<string | null>(null);
+  const [nicknameLoading, setNicknameLoading] = useState(true);
 
   useEffect(() => {
-    const savedPosts = localStorage.getItem('upTick_posts');
-    if (savedPosts) {
-      const posts: Post[] = JSON.parse(savedPosts);
-      const foundPost = posts.find(p => p.id === Number(id));
-      
-      if (foundPost && !hasIncremented.current) {
-        const updatedPosts = posts.map(p => 
-          p.id === foundPost.id ? { ...p, views: (p.views || 0) + 1 } : p
-        );
-        localStorage.setItem('upTick_posts', JSON.stringify(updatedPosts));
-        setPost({ ...foundPost, views: (foundPost.views || 0) + 1 });
-        hasIncremented.current = true;
-      } else {
-        setPost(foundPost || null);
+    setIsLoading(true);
+    setTimeout(() => {
+      const savedPosts = localStorage.getItem('upTick_posts');
+      if (savedPosts) {
+        const posts: Post[] = JSON.parse(savedPosts);
+        const foundPost = posts.find(p => p.id === Number(id));
+        
+        if (foundPost && !hasIncremented.current) {
+          const updatedPosts = posts.map(p => 
+            p.id === foundPost.id ? { ...p, views: (p.views || 0) + 1 } : p
+          );
+          localStorage.setItem('upTick_posts', JSON.stringify(updatedPosts));
+          setPost({ ...foundPost, views: (foundPost.views || 0) + 1 });
+          hasIncremented.current = true;
+        } else {
+          setPost(foundPost || null);
+        }
       }
-    }
+      setIsLoading(false);
+    }, 300);
   }, [id]);
+
+  useEffect(() => {
+    const fetchNickname = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' });
+        if (!res.ok) { 
+          setNicknameLoading(false); 
+          return; 
+        }
+        const data = await res.json();
+        setNickname(data.nickname ?? null);
+      } catch {
+      } finally {
+        setNicknameLoading(false);
+      }
+    };
+    fetchNickname();
+  }, []);
 
   const handleLike = () => {
     if (!post) return;
@@ -47,30 +95,125 @@ export default function PostDetail() {
     }
   };
 
-  const handleAddComment = () => {
-    if (!commentAuthor || !commentContent || !post) return alert("내용을 입력해주세요.");
-    
-    const now = new Date().toLocaleString('ko-KR', {
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
-    });
-
-    const newComment: Comment = {
-      id: Date.now(),
-      author: commentAuthor,
-      content: commentContent,
-      date: now
-    };
-
-    const updatedPost: Post = { ...post, comments: [...(post.comments || []), newComment] };
-    const savedPosts = JSON.parse(localStorage.getItem('upTick_posts') || '[]');
-    localStorage.setItem('upTick_posts', JSON.stringify(savedPosts.map((p: any) => p.id === post.id ? updatedPost : p)));
-    
-    setPost(updatedPost);
-    setCommentAuthor('');
-    setCommentContent('');
+  const handleDeletePost = () => {
+    if (!post) return;
+    if (window.confirm('정말로 이 게시글을 삭제하시겠습니까?')) {
+      const savedPosts = JSON.parse(localStorage.getItem('upTick_posts') || '[]');
+      const updatedPosts = savedPosts.filter((p: Post) => p.id !== post.id);
+      localStorage.setItem('upTick_posts', JSON.stringify(updatedPosts));
+      alert('게시글이 삭제되었습니다.');
+      navigate('/community', { replace: true });
+    }
   };
 
-  if (!post) return <div style={{ padding: '100px', textAlign: 'center' }}>게시글을 로딩 중입니다...</div>;
+  const handleCommentImageChange = (e: ChangeEvent<HTMLInputElement>, isReply: boolean = false) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (isReply) setReplyImage(reader.result as string);
+        else setCommentImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAddComment = () => {
+    if (!nickname) return alert("닉네임을 먼저 설정해야 댓글을 작성할 수 있습니다.");
+    if (!commentContent && !commentImage) return alert("내용이나 사진을 입력해주세요.");
+    
+    setIsCommentSubmitting(true);
+    
+    setTimeout(() => {
+      const now = new Date().toLocaleString('ko-KR', {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+      });
+
+      const newComment: Comment = {
+        id: Date.now(),
+        author: nickname, 
+        content: commentContent,
+        date: now,
+        imageUrl: commentImage,
+        replies: []
+      };
+
+      const updatedPost: Post = { ...post!, comments: [...(post!.comments || []), newComment] };
+      const savedPosts = JSON.parse(localStorage.getItem('upTick_posts') || '[]');
+      
+      localStorage.setItem('upTick_posts', JSON.stringify(savedPosts.map((p: any) => p.id === post!.id ? updatedPost : p)));
+      
+      setPost(updatedPost);
+      setCommentContent('');
+      setCommentImage('');
+      setIsCommentSubmitting(false);
+    }, 400);
+  };
+
+  const handleAddReply = (parentId: number) => {
+    if (!nickname) return alert("닉네임을 먼저 설정해야 대댓글을 작성할 수 있습니다.");
+    if (!replyContent && !replyImage) return alert("내용이나 사진을 입력해주세요.");
+    
+    setIsCommentSubmitting(true);
+    
+    setTimeout(() => {
+      const now = new Date().toLocaleString('ko-KR', {
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+      });
+
+      const newReply: Comment = {
+        id: Date.now(),
+        author: nickname, 
+        content: replyContent,
+        date: now,
+        imageUrl: replyImage
+      };
+
+      const updatedComments = post!.comments.map(c => {
+        if (c.id === parentId) {
+          return { ...c, replies: [...(c.replies || []), newReply] };
+        }
+        return c;
+      });
+
+      const updatedPost: Post = { ...post!, comments: updatedComments };
+      const savedPosts = JSON.parse(localStorage.getItem('upTick_posts') || '[]');
+      localStorage.setItem('upTick_posts', JSON.stringify(savedPosts.map((p: any) => p.id === post!.id ? updatedPost : p)));
+      
+      setPost(updatedPost);
+      setReplyContent('');
+      setReplyImage('');
+      setReplyingTo(null);
+      setIsCommentSubmitting(false);
+    }, 400);
+  };
+
+  const handleDeleteComment = (commentId: number, parentId?: number) => {
+    if (!post) return;
+    if (window.confirm('이 댓글을 삭제하시겠습니까?')) {
+      let updatedComments;
+
+      if (parentId) {
+        updatedComments = post.comments.map(c => {
+          if (c.id === parentId) {
+            return { ...c, replies: c.replies?.filter(r => r.id !== commentId) };
+          }
+          return c;
+        });
+      } else {
+        updatedComments = post.comments.filter(c => c.id !== commentId);
+      }
+
+      const updatedPost = { ...post, comments: updatedComments };
+      const savedPosts = JSON.parse(localStorage.getItem('upTick_posts') || '[]');
+      localStorage.setItem('upTick_posts', JSON.stringify(savedPosts.map((p: Post) => p.id === post.id ? updatedPost : p)));
+      
+      setPost(updatedPost);
+    }
+  };
+
+  if (isLoading) return <div style={{ padding: '100px', textAlign: 'center', color: '#888' }}>게시글을 로딩 중입니다...</div>;
+  if (!post) return <div style={{ padding: '100px', textAlign: 'center', color: '#888' }}>게시글을 찾을 수 없습니다.</div>;
 
   return (
     <div style={{ fontFamily: 'sans-serif', padding: '60px 120px', minHeight: '100vh', backgroundColor: '#f9fafb' }}>
@@ -82,13 +225,23 @@ export default function PostDetail() {
       </button>
       
       <div style={{ backgroundColor: '#fff', borderRadius: '24px', padding: '48px', boxShadow: '0 4px 20px rgba(0,0,0,0.05)', marginBottom: '32px' }}>
-        <h1 style={{ fontSize: '28px', marginBottom: '16px', color: '#222' }}>{post.title}</h1>
-        <div style={{ color: '#888', fontSize: '14px', marginBottom: '40px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0', paddingBottom: '20px' }}>
-          <span>작성자: <strong>{post.author}</strong> | {post.date}</span>
-          <span>추천수: <strong style={{ color: '#22C55E' }}>{post.likes}</strong> | 조회수: {post.views}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+          <h1 style={{ fontSize: '28px', color: '#222', margin: 0 }}>{post.title}</h1>
+          {nickname === post.author && (
+            <button 
+              onClick={handleDeletePost}
+              style={{ padding: '6px 12px', border: '1px solid #ff4d4f', backgroundColor: '#fff', color: '#ff4d4f', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}
+            >
+              삭제
+            </button>
+          )}
         </div>
 
-        {/* 🖼️ 이미지 출력 영역 - 이제 빨간 줄이 사라집니다! */}
+        <div style={{ color: '#888', fontSize: '14px', marginBottom: '40px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0', paddingBottom: '20px' }}>
+          <span>작성자: <strong>{post.author}</strong> | {post.date}</span>
+          <span>추천수: <strong style={{ color: '#4CAF4F' }}>{post.likes}</strong> | 조회수: {post.views}</span>
+        </div>
+
         {post.imageUrl && (
           <div style={{ marginBottom: '40px', textAlign: 'center', backgroundColor: '#fdfdfd', borderRadius: '16px', padding: '20px', border: '1px solid #f5f5f5' }}>
             <img 
@@ -108,11 +261,11 @@ export default function PostDetail() {
             onClick={handleLike}
             style={{ 
               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px',
-              padding: '20px 48px', borderRadius: '100px', border: '1px solid #22C55E', 
-              backgroundColor: '#fff', color: '#22C55E', cursor: 'pointer', fontWeight: 'bold',
+              padding: '20px 48px', borderRadius: '100px', border: '1px solid #4CAF4F', 
+              backgroundColor: '#fff', color: '#4CAF4F', cursor: 'pointer', fontWeight: 'bold',
               transition: '0.2s'
             }}
-            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#f0faf4'}
+            onMouseEnter={e => e.currentTarget.style.backgroundColor = '#e8f5e9'}
             onMouseLeave={e => e.currentTarget.style.backgroundColor = '#fff'}
           >
             <span style={{ fontSize: '28px' }}>👍</span>
@@ -124,34 +277,161 @@ export default function PostDetail() {
       <div style={{ backgroundColor: '#fff', borderRadius: '24px', padding: '48px', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' }}>
         <h3 style={{ fontSize: '20px', marginBottom: '32px', fontWeight: 'bold' }}>댓글 {post.comments?.length || 0}</h3>
         
-        <div style={{ marginBottom: '48px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <input 
-            placeholder="이름" value={commentAuthor} onChange={e => setCommentAuthor(e.target.value)}
-            style={{ width: '180px', padding: '12px 16px', borderRadius: '12px', border: '1px solid #eee', outline: 'none' }}
-          />
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <textarea 
-              placeholder="댓글을 남겨보세요." value={commentContent} onChange={e => setCommentContent(e.target.value)}
-              style={{ flex: 1, height: '100px', padding: '16px', borderRadius: '12px', border: '1px solid #eee', resize: 'none', outline: 'none' }}
-            />
+        {/* 새 댓글 작성 영역 */}
+        <div style={{ marginBottom: '48px', display: 'flex', flexDirection: 'column', gap: '16px', borderBottom: '1px solid #eee', paddingBottom: '32px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #eee', backgroundColor: '#f9fafb', color: '#374151', width: 'fit-content' }}>
+            <span style={{ fontSize: '13px', color: '#9ca3af' }}>작성자</span>
+            {nicknameLoading
+              ? <span style={{ fontSize: '14px', color: '#d1d5db' }}>불러오는 중...</span>
+              : <span style={{ fontSize: '14px', fontWeight: '700' }}>{nickname || '닉네임 미설정'}</span>
+            }
+          </div>
+
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <textarea 
+                placeholder={nickname ? "댓글을 남겨보세요." : "닉네임을 설정해야 댓글을 작성할 수 있습니다."} 
+                value={commentContent} 
+                onChange={e => setCommentContent(e.target.value)}
+                disabled={!nickname || nicknameLoading}
+                style={{ height: '80px', padding: '16px', borderRadius: '12px', border: '1px solid #eee', resize: 'none', outline: 'none', backgroundColor: (!nickname || nicknameLoading) ? '#f5f5f5' : '#fff' }}
+              />
+              
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <label style={{ cursor: (!nickname || nicknameLoading) ? 'not-allowed' : 'pointer', color: '#4CAF4F', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span>📷 사진 첨부</span>
+                  <input type="file" accept="image/*" onChange={(e) => handleCommentImageChange(e, false)} disabled={!nickname || nicknameLoading} style={{ display: 'none' }} />
+                </label>
+                
+                {commentImage && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f9fafb', padding: '4px 12px', borderRadius: '20px', border: '1px solid #eee' }}>
+                    <span style={{ fontSize: '12px', color: '#555' }}>이미지 첨부됨</span>
+                    <button onClick={() => setCommentImage('')} style={{ background: 'none', border: 'none', color: '#999', cursor: 'pointer', fontSize: '16px', padding: 0 }}>×</button>
+                  </div>
+                )}
+              </div>
+            </div>
+
             <button 
               onClick={handleAddComment}
-              style={{ width: '120px', backgroundColor: '#22C55E', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: 'bold', cursor: 'pointer' }}
+              disabled={isCommentSubmitting || nicknameLoading || !nickname}
+              style={{ width: '100px', height: '80px', backgroundColor: '#4CAF4F', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: 'bold', cursor: (isCommentSubmitting || nicknameLoading || !nickname) ? 'not-allowed' : 'pointer', opacity: (isCommentSubmitting || nicknameLoading || !nickname) ? 0.6 : 1 }}
             >
-              등록
+              {isCommentSubmitting ? '등록 중...' : '등록'}
             </button>
           </div>
         </div>
 
+        {/* 댓글 목록 */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
           {post.comments && post.comments.length > 0 ? (
             [...post.comments].reverse().map(comment => (
               <div key={comment.id} style={{ borderBottom: '1px solid #f9f9f9', paddingBottom: '20px' }}>
+                
+                {/* 1. 댓글 작성자, 삭제 버튼, 날짜 영역 */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
-                  <span style={{ fontWeight: 'bold', color: '#222' }}>{comment.author}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontWeight: 'bold', color: '#222' }}>{comment.author}</span>
+                    {/* ✨ 삭제 버튼을 닉네임 옆으로 복귀 (작은 사이즈) */}
+                    {nickname === comment.author && (
+                      <button 
+                        onClick={() => handleDeleteComment(comment.id)}
+                        style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '12px', cursor: 'pointer', padding: 0 }}
+                      >
+                        삭제
+                      </button>
+                    )}
+                  </div>
                   <span style={{ color: '#ccc', fontSize: '12px' }}>{comment.date}</span>
                 </div>
-                <div style={{ fontSize: '15px', color: '#555', lineHeight: '1.6' }}>{comment.content}</div>
+                
+                {/* 2. 댓글 본문 */}
+                <div style={{ fontSize: '15px', color: '#555', lineHeight: '1.6', marginTop: '8px' }}>
+                  {comment.content}
+                </div>
+
+                {/* 3. 댓글 첨부 이미지 */}
+                {comment.imageUrl && (
+                  <img src={comment.imageUrl} alt="댓글 이미지" style={{ marginTop: '12px', maxWidth: '200px', maxHeight: '200px', borderRadius: '8px', border: '1px solid #eee' }} />
+                )}
+
+                {/* ✨ 4. 하단 액션 버튼 (답글 달기만 남김) */}
+                <div style={{ display: 'flex', gap: '16px', marginTop: '16px', alignItems: 'center' }}>
+                  <button 
+                    onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}
+                    style={{ background: 'none', border: 'none', color: '#4CAF4F', fontSize: '14px', cursor: 'pointer', padding: 0, fontWeight: 'bold' }}
+                  >
+                    {replyingTo === comment.id ? '답글 닫기' : '답글 달기'}
+                  </button>
+                </div>
+
+                {/* 5. 대댓글 입력창 */}
+                {replyingTo === comment.id && (
+                  <div style={{ marginTop: '16px', padding: '16px', backgroundColor: '#f4fbf6', borderRadius: '12px', borderLeft: '3px solid #4CAF4F' }}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <textarea 
+                          placeholder={`${comment.author}님에게 답글 남기기...`}
+                          value={replyContent} 
+                          onChange={e => setReplyContent(e.target.value)}
+                          style={{ height: '60px', padding: '12px', borderRadius: '8px', border: '1px solid #ddd', resize: 'none', outline: 'none' }}
+                        />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                          <label style={{ cursor: 'pointer', color: '#4CAF4F', fontSize: '13px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span>📷 사진 첨부</span>
+                            <input type="file" accept="image/*" onChange={(e) => handleCommentImageChange(e, true)} style={{ display: 'none' }} />
+                          </label>
+                          {replyImage && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#fff', padding: '4px 10px', borderRadius: '20px', border: '1px solid #eee' }}>
+                              <span style={{ fontSize: '11px', color: '#555' }}>첨부됨</span>
+                              <button onClick={() => setReplyImage('')} style={{ background: 'none', border: 'none', color: '#999', cursor: 'pointer', fontSize: '14px', padding: 0 }}>×</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => handleAddReply(comment.id)}
+                        disabled={isCommentSubmitting || !nickname}
+                        style={{ width: '80px', height: '60px', backgroundColor: '#4CAF4F', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                      >
+                        등록
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 6. 대댓글 목록 */}
+                {comment.replies && comment.replies.length > 0 && (
+                  <div style={{ marginTop: '16px', paddingLeft: '16px', borderLeft: '2px solid #eee', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {comment.replies.map(reply => (
+                      <div key={reply.id}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontWeight: 'bold', color: '#444', fontSize: '14px' }}>↳ {reply.author}</span>
+                            {/* ✨ 대댓글 삭제 버튼도 닉네임 옆으로 복귀 */}
+                            {nickname === reply.author && (
+                              <button 
+                                onClick={() => handleDeleteComment(reply.id, comment.id)}
+                                style={{ background: 'none', border: 'none', color: '#ccc', fontSize: '11px', cursor: 'pointer', padding: 0 }}
+                              >
+                                삭제
+                              </button>
+                            )}
+                          </div>
+                          <span style={{ color: '#ccc', fontSize: '11px' }}>{reply.date}</span>
+                        </div>
+                        
+                        <div style={{ fontSize: '14px', color: '#666', lineHeight: '1.5', paddingLeft: '18px', marginBottom: reply.imageUrl ? '8px' : '0' }}>
+                          {reply.content}
+                        </div>
+                        
+                        {reply.imageUrl && (
+                          <img src={reply.imageUrl} alt="대댓글 이미지" style={{ marginLeft: '18px', maxWidth: '150px', maxHeight: '150px', borderRadius: '6px', border: '1px solid #eee' }} />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))
           ) : (

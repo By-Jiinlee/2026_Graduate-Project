@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import * as authController from '../../controllers/auth/authController'
 import { isAuthenticated } from '../../middleware/auth/authMiddleware'
-import { checkAccountLock, analyzeAfterLogin } from '../../middleware/auth/anomalyMiddleware'
+import { checkAccountLock, analyzeAfterLogin, checkAbuseIP } from '../../middleware/auth/anomalyMiddleware'
 import {
   validateRegister,
   validateLoginStep1,
@@ -54,6 +54,7 @@ router.post('/register', validateRegister, authController.register)
 router.post(
   '/login/step1',
   loginRateLimiter,
+  checkAbuseIP,
   checkAccountLock,
   validateLoginStep1,
   authController.loginStep1,

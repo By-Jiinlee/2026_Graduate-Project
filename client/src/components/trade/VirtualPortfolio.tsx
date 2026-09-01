@@ -4,6 +4,8 @@ import axios from 'axios'
 import { io, Socket } from 'socket.io-client'
 import PinPad from './PinPad'
 import { formatStockName } from '../../utils/formatStockName'
+import toast from 'react-hot-toast';
+import { API_BASE, SOCKET_URL } from '../../utils/api'
 
 interface Holding {
   stock_id: number
@@ -66,7 +68,6 @@ export default function VirtualPortfolio() {
   const [tab, setTab] = useState<'holdings' | 'orders' | 'pending'>('holdings')
   const [ordersLoading, setOrdersLoading] = useState(false)
   const [pendingLoading, setPendingLoading] = useState(false)
-  const [isPhoneVerified, setIsPhoneVerified] = useState<boolean | null>(null)
 
   // 계좌 개설 PIN flow
   const [pinFlow, setPinFlow] = useState<PinFlow>(null)
@@ -75,7 +76,13 @@ export default function VirtualPortfolio() {
   const [pinError, setPinError] = useState('')
   const [working, setWorking] = useState(false)
 
-  // PIN 변경 flow
+  // PIN 설정/변경 flow
+  //
+  // hasPin 을 따로 들고 가는 이유: 계좌는 있는데 PIN 이 없는 상태가 존재한다.
+  // (PIN 초기화, 또는 PIN 도입 전에 만들어진 계좌) 이때 변경 흐름은 현재 PIN 을
+  // 요구하므로 진입할 수 없고, 설정 경로가 계좌 개설 흐름에만 있으면 계좌가 이미
+  // 열려 있어 그쪽으로도 못 간다 — 매매도 못 하고 PIN 도 못 만드는 잠금이 된다.
+  const [hasPin, setHasPin] = useState<boolean | null>(null)
   const [managePinFlow, setManagePinFlow] = useState<ManagePinFlow>(null)
   const [oldPin, setOldPin] = useState('')
   const [newPin1, setNewPin1] = useState('')
@@ -86,13 +93,13 @@ export default function VirtualPortfolio() {
   const [showResetPin, setShowResetPin] = useState(false)
   const [resetPinKey, setResetPinKey] = useState(0)
   const [resetError, setResetError] = useState('')
-  const [resetWorking, setResetWorking] = useState(false)
-
+  const [, setResetWorking] = useState(false)
+  
   const socketRef = useRef<Socket | null>(null)
 
   const fetchPortfolio = useCallback(async () => {
     try {
-      const res = await axios.get('http://localhost:3000/api/trade/virtual/portfolio', { withCredentials: true })
+      const res = await axios.get(`${API_BASE}/api/trade/virtual/portfolio`, { withCredentials: true })
       setPortfolio(res.data)
       setNoAccount(false)
     } catch (err: any) {
@@ -105,7 +112,7 @@ export default function VirtualPortfolio() {
   const fetchOrders = useCallback(async () => {
     setOrdersLoading(true)
     try {
-      const res = await axios.get('http://localhost:3000/api/trade/virtual/orders', { withCredentials: true })
+      const res = await axios.get(`${API_BASE}/api/trade/virtual/orders`, { withCredentials: true })
       setOrders(res.data)
     } catch { /* silent */ }
     finally { setOrdersLoading(false) }
@@ -114,24 +121,31 @@ export default function VirtualPortfolio() {
   const fetchPendingOrders = useCallback(async () => {
     setPendingLoading(true)
     try {
-      const res = await axios.get('http://localhost:3000/api/trade/virtual/orders/pending', { withCredentials: true })
+      const res = await axios.get(`${API_BASE}/api/trade/virtual/orders/pending`, { withCredentials: true })
       setPendingOrders(res.data)
     } catch { /* silent */ }
     finally { setPendingLoading(false) }
   }, [])
 
+  const fetchPinStatus = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API_BASE}/api/trade/pin/status`, { withCredentials: true })
+      setHasPin(!!data?.hasPin)
+    } catch {
+      setHasPin(null)
+    }
+  }, [])
+
   useEffect(() => {
     fetchPortfolio()
-    axios.get('http://localhost:3000/api/auth/me', { withCredentials: true })
-      .then(r => setIsPhoneVerified(!!r.data.is_phone_verified))
-      .catch(() => setIsPhoneVerified(false))
-  }, [fetchPortfolio])
+    fetchPinStatus()
+  }, [fetchPortfolio, fetchPinStatus])
 
   // 실시간 가격 업데이트 — 보유 종목 구독
   useEffect(() => {
     if (!portfolio || portfolio.holdings.length === 0) return
 
-    const socket = io('http://localhost:3000')
+    const socket = io(SOCKET_URL, { withCredentials: true })
     socketRef.current = socket
     const holdingCodes = new Set(portfolio.holdings.map(h => h.code))
 
@@ -165,22 +179,43 @@ export default function VirtualPortfolio() {
       })
     })
 
+    socket.on('order:filled', (data: any) => {
+      const sideText = data.side === 'buy' ? '매수' : '매도';
+      // 파일 상단에 import toast from 'react-hot-toast'; (또는 사용하는 알림 라이브러리) 필수
+      toast.success(`[체결 알림] ${data.stockCode} ${data.quantity}주 ${sideText} 완료`);
+      
+      if (fetchPortfolio) {
+        fetchPortfolio();
+      }
+    })
+
     return () => {
       portfolio.holdings.forEach(h => socket.emit('unsubscribe:stock', h.code))
+      
+      // 3. ★ 언마운트 시 체결 알림 끄기 추가 ★
+      socket.off('order:filled') 
       socket.disconnect()
     }
   }, [portfolio?.holdings.map(h => h.code).join(',')])
 
   useEffect(() => {
-    if (tab === 'orders'  && portfolio) fetchOrders()
-    if (tab === 'pending' && portfolio) fetchPendingOrders()
-  }, [tab, portfolio, fetchOrders, fetchPendingOrders])
+    if (tab === 'orders'  && !noAccount && !loading) fetchOrders()
+    if (tab === 'pending' && !noAccount && !loading) fetchPendingOrders()
+  }, [tab, noAccount, loading, fetchOrders, fetchPendingOrders])
 
   // ── 계좌 개설 PIN flow ────────────────────────────────────────
 
-  const startAccountOpening = () => {
+  // PIN 은 실거래와 공유하는 계정 단위 수단이라 이미 갖고 있을 수 있다.
+  // 그 경우 재설정 단계를 건너뛴다 — 서버가 기존 PIN 덮어쓰기를 거부하므로
+  // 무조건 set1 부터 시작하면 개설이 400 으로 막힌다.
+  const startAccountOpening = async () => {
     setPinError('')
-    setPinFlow('set1')
+    try {
+      const { data } = await axios.get(`${API_BASE}/api/trade/pin/status`, { withCredentials: true })
+      setPinFlow(data?.hasPin ? 'open' : 'set1')
+    } catch {
+      setPinFlow('set1')
+    }
     setPinPadKey(k => k + 1)
   }
 
@@ -199,7 +234,7 @@ export default function VirtualPortfolio() {
       }
       setWorking(true)
       try {
-        await axios.post('http://localhost:3000/api/trade/virtual/pin', { pin }, { withCredentials: true })
+        await axios.post(`${API_BASE}/api/trade/pin`, { pin }, { withCredentials: true })
         setPinFlow('open')
         setPinPadKey(k => k + 1)
         setPinError('')
@@ -214,7 +249,7 @@ export default function VirtualPortfolio() {
     } else if (pinFlow === 'open') {
       setWorking(true)
       try {
-        await axios.post('http://localhost:3000/api/trade/virtual/account/open', { pin }, { withCredentials: true })
+        await axios.post(`${API_BASE}/api/trade/virtual/account/open`, { pin }, { withCredentials: true })
         setPinFlow(null)
         setPinError('')
         setLoading(true)
@@ -240,13 +275,29 @@ export default function VirtualPortfolio() {
     setManagePinError('')
     setOldPin('')
     setNewPin1('')
-    setManagePinFlow('old')
+    // PIN 이 없으면 현재 PIN 확인 단계를 건너뛰고 곧바로 설정한다.
+    setManagePinFlow(hasPin ? 'old' : 'new1')
     setManagePinPadKey(k => k + 1)
   }
 
   const handleChangePinInput = async (pin: string) => {
     if (managePinFlow === 'old') {
+      // 현재 PIN 을 여기서 바로 검증한다.
+      // 마지막 단계에서만 확인하면, 틀린 PIN 으로도 새 PIN 을 두 번 입력하게 한 뒤에야
+      // 거절하게 된다. 서버의 verifyPin 이 5회 실패 잠금·감사 로그를 그대로 수행한다.
+      try {
+        await axios.post(
+          `${API_BASE}/api/trade/pin/verify`,
+          { pin },
+          { withCredentials: true }
+        )
+      } catch (err: any) {
+        setManagePinError(err.response?.data?.message ?? '현재 PIN이 올바르지 않습니다')
+        setManagePinPadKey(k => k + 1)
+        return
+      }
       setOldPin(pin)
+      setManagePinError('')
       setManagePinFlow('new1')
       setManagePinPadKey(k => k + 1)
     } else if (managePinFlow === 'new1') {
@@ -262,19 +313,28 @@ export default function VirtualPortfolio() {
         return
       }
       try {
-        await axios.post(
-          'http://localhost:3000/api/trade/virtual/pin/change',
-          { oldPin, newPin: pin },
-          { withCredentials: true }
-        )
+        if (hasPin) {
+          await axios.post(
+            `${API_BASE}/api/trade/pin/change`,
+            { oldPin, newPin: pin },
+            { withCredentials: true }
+          )
+        } else {
+          await axios.post(
+            `${API_BASE}/api/trade/pin`,
+            { pin },
+            { withCredentials: true }
+          )
+        }
         setManagePinFlow(null)
         setManagePinError('')
-        alert('PIN이 변경되었습니다.')
+        alert(hasPin ? 'PIN이 변경되었습니다.' : 'PIN이 설정되었습니다.')
+        fetchPinStatus()
       } catch (err: any) {
-        setManagePinError(err.response?.data?.message ?? 'PIN 변경에 실패했습니다')
+        setManagePinError(err.response?.data?.message ?? (hasPin ? 'PIN 변경에 실패했습니다' : 'PIN 설정에 실패했습니다'))
         setOldPin('')
         setNewPin1('')
-        setManagePinFlow('old')
+        setManagePinFlow(hasPin ? 'old' : 'new1')
         setManagePinPadKey(k => k + 1)
       }
     }
@@ -292,7 +352,7 @@ export default function VirtualPortfolio() {
     setResetWorking(true)
     try {
       await axios.post(
-        'http://localhost:3000/api/trade/virtual/account/reset',
+        `${API_BASE}/api/trade/virtual/account/reset`,
         { pin },
         { withCredentials: true }
       )
@@ -313,7 +373,7 @@ export default function VirtualPortfolio() {
   const handleCancelOrder = async (orderId: number) => {
     try {
       await axios.delete(
-        `http://localhost:3000/api/trade/virtual/orders/${orderId}`,
+        `${API_BASE}/api/trade/virtual/orders/${orderId}`,
         { withCredentials: true }
       )
       fetchPendingOrders()
@@ -334,28 +394,6 @@ export default function VirtualPortfolio() {
   // ── Render: no account ───────────────────────────────────────
 
   if (noAccount) {
-    if (isPhoneVerified === false) {
-      return (
-        <div style={{ textAlign: 'center', padding: '48px 20px' }}>
-          <div style={{ width: '64px', height: '64px', borderRadius: '20px', backgroundColor: '#fff7ed', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', marginBottom: '20px' }}>
-            🔐
-          </div>
-          <p style={{ fontWeight: '800', fontSize: '18px', marginBottom: '8px', color: '#111' }}>
-            휴대폰 인증 후 이용 가능합니다
-          </p>
-          <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '24px', lineHeight: '1.6' }}>
-            모의투자 계좌 개설을 위해<br />먼저 휴대폰 인증을 완료해주세요.
-          </p>
-          <button
-            onClick={() => navigate('/mypage')}
-            style={{ padding: '12px 28px', backgroundColor: '#22C55E', color: '#fff', border: 'none', borderRadius: '12px', fontWeight: '700', fontSize: '14px', cursor: 'pointer', boxShadow: '0 4px 12px rgba(34,197,94,0.3)' }}
-          >
-            마이페이지에서 인증하기
-          </button>
-        </div>
-      )
-    }
-
     const pinTitles: Record<NonNullable<PinFlow>, string> = {
       set1: 'PIN 설정 (1/2)',
       set2: 'PIN 확인 (2/2)',
@@ -364,7 +402,7 @@ export default function VirtualPortfolio() {
     const pinSubtitles: Record<NonNullable<PinFlow>, string> = {
       set1: '매수/매도 시 사용할 6자리 PIN을 입력하세요',
       set2: '확인을 위해 PIN을 다시 입력하세요',
-      open: '방금 설정한 PIN을 입력하면 계좌가 개설됩니다',
+      open: '거래 PIN을 입력하면 계좌가 개설됩니다',
     }
 
     return (
@@ -417,13 +455,13 @@ export default function VirtualPortfolio() {
       {managePinFlow && (() => {
         const titles: Record<NonNullable<ManagePinFlow>, string> = {
           old:  '현재 PIN 입력',
-          new1: '새 PIN 설정 (1/2)',
-          new2: '새 PIN 확인 (2/2)',
+          new1: hasPin ? '새 PIN 설정 (1/2)' : 'PIN 설정 (1/2)',
+          new2: hasPin ? '새 PIN 확인 (2/2)' : 'PIN 확인 (2/2)',
         }
         const subtitles: Record<NonNullable<ManagePinFlow>, string> = {
           old:  '기존 6자리 PIN을 입력하세요',
-          new1: '새로 사용할 6자리 PIN을 입력하세요',
-          new2: '확인을 위해 새 PIN을 다시 입력하세요',
+          new1: hasPin ? '새로 사용할 6자리 PIN을 입력하세요' : '거래 승인에 사용할 6자리 PIN을 입력하세요',
+          new2: '확인을 위해 PIN을 다시 입력하세요',
         }
         return (
           <PinPad
@@ -500,6 +538,25 @@ export default function VirtualPortfolio() {
         </div>
       </div>
 
+      {/* PIN 이 없으면 매매·초기화가 전부 막히므로 먼저 눈에 띄게 알린다 */}
+      {hasPin === false && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+          padding: '12px 14px', marginBottom: '12px',
+          backgroundColor: '#fff7ed', border: '1.5px solid #fed7aa', borderRadius: '12px',
+        }}>
+          <span style={{ fontSize: '12px', color: '#c2410c', fontWeight: '600', lineHeight: 1.5 }}>
+            🔐 거래 PIN이 설정되지 않았습니다 — 매수·매도·계좌 초기화에 필요합니다
+          </span>
+          <button
+            onClick={startChangePin}
+            style={{ flexShrink: 0, padding: '8px 14px', border: 'none', borderRadius: '9px', backgroundColor: '#ea580c', color: '#fff', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}
+          >
+            지금 설정
+          </button>
+        </div>
+      )}
+
       {/* ── 관리 버튼 ── */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
         <button
@@ -508,7 +565,7 @@ export default function VirtualPortfolio() {
           onMouseEnter={e => { e.currentTarget.style.borderColor = '#22C55E'; e.currentTarget.style.color = '#15803d' }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = '#e5e7eb'; e.currentTarget.style.color = '#374151' }}
         >
-          🔑 PIN 변경
+          🔑 {hasPin === false ? 'PIN 설정' : 'PIN 변경'}
         </button>
         <button
           onClick={() => {

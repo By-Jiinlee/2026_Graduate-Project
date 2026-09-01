@@ -1,32 +1,66 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useTradeModeStore } from '../store/tradeModeStore'
 import { useProfileStore } from '../store/profileStore'
 import VirtualPortfolio from '../components/trade/VirtualPortfolio'
+import PinPad from '../components/trade/PinPad'
 
-function AccountSection({ mode }: { mode: 'real' | 'virtual' }) {
-  const [hasAccount, setHasAccount] = useState<boolean | null>(null)
-  const [opening, setOpening] = useState(false)
-  const [msg, setMsg] = useState('')
+import { API_BASE } from '../utils/api'
+import { signedFetch } from '../utils/tradeSigning'
+
+// ─── 실거래 포트폴리오 섹션 ─────────────────────────────────────
+function RealPortfolioSection({ onRegister, refreshKey }: { onRegister: () => void; refreshKey: number }) {
+  const [status, setStatus] = useState<'loading' | 'registered' | 'not_registered'>('loading')
 
   useEffect(() => {
-    if (mode !== 'virtual') return
-    fetch('http://localhost:3000/api/trade/virtual/portfolio', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((data) => setHasAccount(!!data.balance || data.balance === 0))
-      .catch(() => setHasAccount(false))
-  }, [mode])
+    fetch(`${API_BASE}/api/trade/real/account`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => setStatus(data.isRegistered ? 'registered' : 'not_registered'))
+      .catch(() => setStatus('not_registered'))
+  }, [refreshKey])
 
-  if (mode === 'real') {
+  if (status === 'loading') return <p className="text-sm text-gray-400">로딩 중...</p>
+
+  if (status === 'not_registered') {
     return (
-      <div className="p-5 bg-blue-50 border border-blue-200 rounded-2xl text-center">
-        <p className="text-sm text-gray-600 mb-4">실거래 계좌를 연동하면 실제 주식 거래가 가능합니다.</p>
-        <button className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition text-sm">
-          실거래 계좌 연동
+      <div className="flex flex-col items-center justify-center py-12 gap-4">
+        <div className="text-4xl">🏦</div>
+        <p className="font-bold text-gray-800">아직 실거래 계좌가 등록되지 않았습니다</p>
+        <p className="text-sm text-gray-500">KIS 앱키를 등록하면 실제 주식 거래 및 포트폴리오를 확인할 수 있습니다.</p>
+        <button
+          onClick={onRegister}
+          className="mt-2 px-6 py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition text-sm"
+        >
+          계좌 등록하기
         </button>
       </div>
     )
   }
+
+  return (
+    <div className="flex items-center gap-20">
+      <div className="w-56 h-56 bg-slate-50 rounded-full border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
+        그래프 영역 (데이터 대기 중)
+      </div>
+      <div className="flex-1 flex flex-col gap-6">
+        <div className="h-40 bg-slate-50 rounded-xl border border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
+          보유 주식 목록이 여기에 표시됩니다.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── 모의투자 계좌 섹션 ──────────────────────────────────────────
+function VirtualAccountSection() {
+  const [hasAccount, setHasAccount] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/trade/virtual/portfolio`, { credentials: 'include' })
+      .then((r) => r.json())
+      .then((data) => setHasAccount(!!data.balance || data.balance === 0))
+      .catch(() => setHasAccount(false))
+  }, [])
 
   if (hasAccount === null) return <p className="text-sm text-gray-400">로딩 중...</p>
 
@@ -38,41 +72,232 @@ function AccountSection({ mode }: { mode: 'real' | 'virtual' }) {
     )
   }
 
-  const handleOpen = async () => {
-    setOpening(true)
-    setMsg('')
+  // 개설은 아래 모의투자 섹션의 PIN 설정 흐름에서만 처리한다.
+  // 여기에 있던 개설 버튼은 PIN 없이 요청을 보내 서버가 항상 400 으로 거절했고,
+  // PIN 설정 단계를 건너뛰어 거래 인증 수단이 없는 계좌를 만들려 했다.
+  return (
+    <div className="p-5 bg-gray-50 border border-gray-200 rounded-2xl text-center space-y-1">
+      <p className="text-sm text-gray-600">아직 모의투자 계좌가 없습니다.</p>
+      <p className="text-xs text-gray-400">계좌 개설 시 초기 자금 1,000만원이 지급됩니다.</p>
+      <p className="text-xs text-gray-500 pt-2">
+        아래 <span className="font-semibold text-[#22C55E]">모의투자</span> 섹션에서 거래용 PIN을 설정하면 계좌가 개설됩니다.
+      </p>
+    </div>
+  )
+}
+
+// ─── 실거래 KIS 계좌 섹션 ────────────────────────────────────────
+function RealAccountSection({ onAccountChange }: { onAccountChange: () => void }) {
+  const [status, setStatus] = useState<'loading' | 'registered' | 'not_registered'>('loading')
+  const [maskedCano, setMaskedCano] = useState('')
+  const [form, setForm] = useState({ appKey: '', appSecret: '', cano: '', acntPrdtCd: '01' })
+  const [showForm, setShowForm] = useState(false)
+
+  // 계좌 등록·해제의 PIN 도 화면 키패드로 받는다 — 모의투자·PIN 설정과 같은 경로다.
+  // 'register' 는 KIS 정보 입력을 마친 뒤, 'remove' 는 해제 버튼을 누른 뒤 뜬다.
+  const [pinFlow, setPinFlow] = useState<'register' | 'remove' | null>(null)
+  const [pinPadKey, setPinPadKey] = useState(0)
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const fetchStatus = async () => {
     try {
-      const res = await fetch('http://localhost:3000/api/trade/virtual/account/open', {
-        method: 'POST',
-        credentials: 'include',
-      })
+      const res = await fetch(`${API_BASE}/api/trade/real/account`, { credentials: 'include' })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.message)
-      setHasAccount(true)
-      setMsg('계좌가 개설되었습니다!')
-    } catch (e: any) {
-      setMsg(e.message)
-    } finally {
-      setOpening(false)
+      if (data.isRegistered) {
+        setStatus('registered')
+        setMaskedCano(data.maskedCano ?? '')
+      } else {
+        setStatus('not_registered')
+      }
+    } catch {
+      setStatus('not_registered')
     }
   }
 
+  useEffect(() => { fetchStatus() }, [])
+
+  // KIS 정보만 먼저 검증하고, PIN 은 키패드로 따로 받는다.
+  const startRegister = () => {
+    const { appKey, appSecret, cano, acntPrdtCd } = form
+    if (!appKey || !appSecret || !cano || !acntPrdtCd) {
+      setMsg({ text: '모든 항목을 입력해주세요', ok: false })
+      return
+    }
+    setMsg(null)
+    setPinFlow('register')
+    setPinPadKey(k => k + 1)
+  }
+
+  const handleRegister = async (pin: string) => {
+    const { appKey, appSecret, cano, acntPrdtCd } = form
+    setLoading(true)
+    setMsg(null)
+    try {
+      const res = await signedFetch(`${API_BASE}/api/trade/real/account`, {
+        method: 'POST',
+        credentials: 'include',
+        body: JSON.stringify({ appKey, appSecret, cano, acntPrdtCd, pin }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message)
+      setMsg({ text: '실거래 계좌가 등록되었습니다', ok: true })
+      setShowForm(false)
+      setForm({ appKey: '', appSecret: '', cano: '', acntPrdtCd: '01' })
+      fetchStatus()
+      onAccountChange()
+    } catch (e: any) {
+      setMsg({ text: e.message, ok: false })
+    } finally {
+      setPinFlow(null)
+      setLoading(false)
+    }
+  }
+
+  const handleRemove = async (pin: string) => {
+    setLoading(true)
+    setMsg(null)
+    try {
+      const res = await signedFetch(`${API_BASE}/api/trade/real/account`, {
+        method: 'DELETE',
+        credentials: 'include',
+        body: JSON.stringify({ pin }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.message)
+      setMsg({ text: '계좌 연동이 해제되었습니다', ok: true })
+      fetchStatus()
+      onAccountChange()
+    } catch (e: any) {
+      setMsg({ text: e.message, ok: false })
+    } finally {
+      setPinFlow(null)
+      setLoading(false)
+    }
+  }
+
+  if (status === 'loading') return <p className="text-sm text-gray-400">로딩 중...</p>
+
+  if (status === 'registered') {
+    return (
+      <div className="space-y-3">
+        <div className="p-5 bg-orange-50 border border-orange-200 rounded-2xl">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-orange-600 font-bold text-sm">✅ 실거래 계좌 연동됨</span>
+          </div>
+          <p className="text-xs text-gray-500">계좌번호: {maskedCano || '등록됨'}</p>
+        </div>
+        {msg && (
+          <p className={`text-sm font-semibold text-center ${msg.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg.text}</p>
+        )}
+        <button
+          onClick={() => { setMsg(null); setPinFlow('remove'); setPinPadKey(k => k + 1) }}
+          disabled={loading}
+          className="w-full py-2.5 border-2 border-red-200 text-red-500 font-bold rounded-xl hover:bg-red-50 transition text-sm disabled:opacity-50"
+        >
+          {loading ? '처리 중...' : '계좌 연동 해제'}
+        </button>
+
+        {pinFlow === 'remove' && (
+          <PinPad
+            key={pinPadKey}
+            title="계좌 연동 해제"
+            subtitle="본인 확인을 위해 거래 PIN을 입력하세요"
+            onConfirm={handleRemove}
+            onCancel={() => setPinFlow(null)}
+          />
+        )}
+      </div>
+    )
+  }
+
+  // not_registered
   return (
     <div className="space-y-3">
-      <div className="p-5 bg-gray-50 border border-gray-200 rounded-2xl text-center">
-        <p className="text-sm text-gray-600 mb-1">아직 모의투자 계좌가 없습니다.</p>
-        <p className="text-xs text-gray-400">계좌 개설 시 초기 자금 1,000만원이 지급됩니다.</p>
-      </div>
-      {msg && <p className={`text-sm font-semibold text-center ${msg.includes('개설') ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg}</p>}
-      <button
-        onClick={handleOpen}
-        disabled={opening}
-        className="w-full py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm disabled:opacity-50"
-      >
-        {opening ? '개설 중...' : '모의투자 계좌 개설'}
-      </button>
+      {!showForm ? (
+        <>
+          <div className="p-5 bg-orange-50 border border-orange-200 rounded-2xl text-center">
+            <p className="text-sm text-gray-700 font-semibold mb-1">KIS 실거래 계좌 연동</p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              한국투자증권 Open API 앱키를 등록하면<br />실제 주식 매매가 가능합니다
+            </p>
+          </div>
+          {msg && (
+            <p className={`text-sm font-semibold text-center ${msg.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg.text}</p>
+          )}
+          <button
+            onClick={() => { setShowForm(true); setMsg(null) }}
+            className="w-full py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition text-sm"
+          >
+            계좌 등록하기
+          </button>
+        </>
+      ) : (
+        <div className="space-y-3">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+            <p className="text-xs text-amber-700 font-semibold">KIS 오픈 API 앱키 입력</p>
+            <p className="text-xs text-gray-500 mt-0.5">한국투자증권 개발자센터에서 발급한 본인 계좌 앱키를 입력하세요.</p>
+          </div>
+          {[
+            { key: 'appKey', label: 'APP KEY', placeholder: 'PS...' },
+            { key: 'appSecret', label: 'APP SECRET', placeholder: 'APP SECRET 입력' },
+            { key: 'cano', label: '계좌번호 (앞 8자리)', placeholder: '12345678' },
+            { key: 'acntPrdtCd', label: '계좌상품코드 (뒤 2자리)', placeholder: '01' },
+          ].map(({ key, label, placeholder }) => (
+            <div key={key}>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+              <input
+                type={key === 'appSecret' ? 'password' : 'text'}
+                value={(form as any)[key]}
+                onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                placeholder={placeholder}
+                maxLength={key === 'cano' ? 8 : key === 'acntPrdtCd' ? 2 : undefined}
+                className="w-full px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm outline-none focus:border-orange-400"
+              />
+            </div>
+          ))}
+          <div>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              🔒 등록 버튼을 누르면 본인 확인을 위한 거래 PIN 입력창이 열립니다.
+            </p>
+          </div>
+          {msg && (
+            <p className={`text-sm font-semibold text-center ${msg.ok ? 'text-[#22C55E]' : 'text-red-500'}`}>{msg.text}</p>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={startRegister}
+              disabled={loading}
+              className="flex-1 py-3 bg-orange-600 text-white font-bold rounded-xl hover:bg-orange-700 transition text-sm disabled:opacity-50"
+            >
+              {loading ? '등록 중...' : '등록 완료'}
+            </button>
+            <button
+              onClick={() => { setShowForm(false); setMsg(null) }}
+              className="flex-1 py-3 border-2 border-gray-200 text-gray-500 font-bold rounded-xl hover:bg-gray-50 transition text-sm"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pinFlow === 'register' && (
+        <PinPad
+          key={pinPadKey}
+          title="실거래 계좌 등록"
+          subtitle="본인 확인을 위해 거래 PIN을 입력하세요"
+          onConfirm={handleRegister}
+          onCancel={() => setPinFlow(null)}
+        />
+      )}
     </div>
   )
+}
+
+function AccountSection({ mode, onAccountChange }: { mode: 'real' | 'virtual'; onAccountChange: () => void }) {
+  if (mode === 'real') return <RealAccountSection onAccountChange={onAccountChange} />
+  return <VirtualAccountSection />
 }
 
 interface TrustedDevice {
@@ -104,12 +329,22 @@ interface UserInfo {
   email_changed_at: string | null
 }
 
-const API = 'http://localhost:3000/api/auth'
+const API = `${API_BASE}/api/auth`
 
 export default function MyPage() {
   const navigate = useNavigate()
+  const location = useLocation()
 
   const [activeTab, setActiveTab] = useState<'profile' | 'security' | 'investment' | 'settings'>('profile')
+  const [realAccountKey, setRealAccountKey] = useState(0)
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const tab = params.get('tab')
+    if (tab === 'security' || tab === 'investment' || tab === 'profile' || tab === 'settings') {
+      setActiveTab(tab)
+    }
+  }, [location.search])
   const { mode } = useTradeModeStore()
   const { profileImage, setProfileImage } = useProfileStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -172,6 +407,13 @@ export default function MyPage() {
       setNickname(data.nickname ?? '')
       setPhone(data.phone ?? '')
     } catch {}
+
+    try {
+      const res = await fetch(`${API_BASE}/api/user/profile-image`, { credentials: 'include' })
+      if (!res.ok) return
+      const data = await res.json()
+      setProfileImage(data.imageUrl ?? null)
+    } catch {}
   }, [])
 
   const fetchDevices = useCallback(async () => {
@@ -214,15 +456,38 @@ export default function MyPage() {
     const allowed = ['image/jpeg', 'image/png', 'image/webp']
     if (!allowed.includes(file.type)) { setImageError('JPG, PNG, WEBP 형식만 업로드 가능합니다'); return }
     if (file.size > 5 * 1024 * 1024) { setImageError('파일 크기는 5MB 이하여야 합니다'); return }
+
     const reader = new FileReader()
-    reader.onload = (ev) => setProfileImage(ev.target?.result as string)
+    reader.onload = async (ev) => {
+      const imageBase64 = ev.target?.result as string
+      setProfileImage(imageBase64) // 업로드 전 미리보기
+      try {
+        const res = await fetch(`${API_BASE}/api/user/profile-image`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64, mimeType: file.type }),
+        })
+        const data = await res.json()
+        if (!res.ok) { setImageError(data.message ?? '업로드 실패'); return }
+        setProfileImage(data.imageUrl)
+      } catch {
+        setImageError('업로드 중 오류가 발생했습니다')
+      }
+    }
     reader.readAsDataURL(file)
   }
 
-  const handleRemoveImage = () => {
+  const handleRemoveImage = async () => {
     setProfileImage(null)
     setImageError('')
     if (fileInputRef.current) fileInputRef.current.value = ''
+    try {
+      await fetch(`${API_BASE}/api/user/profile-image`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+    } catch {}
   }
 
   // ── 닉네임 중복 확인 ────────────────────────────────────────
@@ -515,16 +780,7 @@ export default function MyPage() {
           {mode === 'virtual' ? (
             <VirtualPortfolio />
           ) : (
-            <div className="flex items-center gap-20">
-              <div className="w-56 h-56 bg-slate-50 rounded-full border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
-                그래프 영역 (데이터 대기 중)
-              </div>
-              <div className="flex-1 flex flex-col gap-6">
-                <div className="h-40 bg-slate-50 rounded-xl border border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-sm">
-                  보유 주식 목록이 여기에 표시됩니다.
-                </div>
-              </div>
-            </div>
+            <RealPortfolioSection onRegister={() => setActiveTab('security')} refreshKey={realAccountKey} />
           )}
         </section>
 
@@ -949,13 +1205,31 @@ export default function MyPage() {
                       )}
                     </div>
                   </div>
+
+                  <div className="border-t border-gray-50" />
+
+                  {/* 계좌 설정 */}
+                  <div>
+                    <h4 className="font-bold text-gray-800 mb-3">
+                      {mode === 'virtual' ? '모의투자 계좌' : '실거래 계좌'}
+                    </h4>
+                    {!userInfo?.is_phone_verified ? (
+                      <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 text-center">
+                        <div className="text-2xl mb-2">🔐</div>
+                        <p className="font-semibold text-gray-800 text-sm mb-1">계좌 설정을 위해 휴대폰 인증이 필요합니다</p>
+                        <p className="text-xs text-gray-500">위에서 휴대폰 인증을 먼저 완료해주세요.</p>
+                      </div>
+                    ) : (
+                      <AccountSection mode={mode} onAccountChange={() => setRealAccountKey(k => k + 1)} />
+                    )}
+                  </div>
                 </div>
               )}
 
               {/* ── 투자 성향 탭 ── */}
               {activeTab === 'investment' && (
                 <div className="space-y-8 max-w-md">
-                  <h3 className="font-black text-xl mb-6">투자 성향 & 계좌 설정</h3>
+                  <h3 className="font-black text-xl mb-6">투자 성향</h3>
 
                   {/* 투자 성향 - 항상 표시 */}
                   <div>
@@ -995,31 +1269,6 @@ export default function MyPage() {
                     )}
                   </div>
 
-                  <div className="border-t border-gray-100" />
-
-                  {/* 계좌 설정 - 휴대폰 인증 여부로 게이트 */}
-                  <div>
-                    <h4 className="font-bold text-gray-800 mb-3">
-                      {mode === 'virtual' ? '모의투자 계좌' : '실거래 계좌'}
-                    </h4>
-                    {!userInfo?.is_phone_verified ? (
-                      <div className="space-y-3">
-                        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 text-center">
-                          <div className="text-2xl mb-2">🔐</div>
-                          <p className="font-semibold text-gray-800 text-sm mb-1">계좌 설정을 위해 휴대폰 인증이 필요합니다</p>
-                          <p className="text-xs text-gray-500">보안 및 인증 탭에서 먼저 완료해주세요.</p>
-                        </div>
-                        <button
-                          onClick={() => setActiveTab('security')}
-                          className="w-full py-3 bg-[#22C55E] text-white font-bold rounded-xl hover:bg-[#1ba850] transition text-sm"
-                        >
-                          보안 탭으로 이동
-                        </button>
-                      </div>
-                    ) : (
-                      <AccountSection mode={mode} />
-                    )}
-                  </div>
                 </div>
               )}
 

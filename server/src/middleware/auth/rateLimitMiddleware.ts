@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import { logAnomaly } from '../../services/auth/anomalyService'
 
 interface RateLimitEntry {
   count: number
@@ -23,6 +24,12 @@ const createLimiter = (
     windowMs: number
     blockMs: number
     message: string
+    /**
+     * 한도 초과로 요청을 막을 때 호출된다. 리미터가 막은 요청은 이상탐지 계층에
+     * 도달하지 못하므로, 여기서 기록하지 않으면 대량 시도가 감사 로그에 전혀
+     * 남지 않는 관측 공백이 생긴다.
+     */
+    onBlock?: (ip: string, req: Request) => void
   },
 ) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -33,6 +40,7 @@ const createLimiter = (
     // 차단 상태 확인
     if (entry?.blockedUntil && now < entry.blockedUntil) {
       const remaining = Math.ceil((entry.blockedUntil - now) / 1000 / 60)
+      options.onBlock?.(ip, req)
       return res.status(429).json({
         message: `${options.message} (${remaining}분 후 재시도 가능)`,
       })
@@ -50,6 +58,7 @@ const createLimiter = (
         ...entry,
         blockedUntil: now + options.blockMs,
       })
+      options.onBlock?.(ip, req)
       return res.status(429).json({ message: options.message })
     }
 
@@ -65,6 +74,17 @@ export const loginRateLimiter = createLimiter(loginStore, {
   windowMs: 15 * 60 * 1000,
   blockMs: 15 * 60 * 1000,
   message: '로그인 시도 횟수를 초과했습니다. 15분 후 다시 시도해주세요',
+  // 한도 초과 사실 자체를 남긴다. 응답을 지연시키지 않도록 대기하지 않는다.
+  onBlock: (ip, req) => {
+    void logAnomaly({
+      email: typeof req.body?.email === 'string' ? req.body.email : '',
+      ip,
+      userAgent: req.headers['user-agent'],
+      type: 'BRUTE_FORCE',
+      action: 'BLOCK',
+      detail: `로그인 요청 한도 초과(IP당 15회/15분) → 레이트 리미터 차단`,
+    }).catch(() => undefined)
+  },
 })
 
 // 이메일 인증 Rate Limiter: 분당 3회 제한

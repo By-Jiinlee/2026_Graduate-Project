@@ -9,6 +9,16 @@ import { priceMap } from '../market/KisRealtime'
 import { QueryTypes } from 'sequelize'
 import { recordSeed, logTrade, getTradeNonce, verifyTradeSignature } from '../web3/contractService'
 import Wallet from '../../models/user/Wallet'
+import { TRADE_POLICY } from '../auth/tradeAnomalyService'
+import { recordTradeAuthAttempt } from '../auth/anomalyService'
+import { assertNotCanary } from '../security/canaryService'
+
+// 조회 계열 함수는 원래 userId 만 받는다. 카나리 탐지 기록에 IP·UA 를 남기려면
+// 호출부(컨트롤러)의 요청 문맥이 필요하므로 선택 인자로 받는다 — 기존 호출부는 그대로 동작한다.
+export interface AccessContext {
+  ip?: string
+  userAgent?: string
+}
 
 export const INITIAL_BALANCE = 10_000_000
 
@@ -29,7 +39,19 @@ export const setPin = async (userId: number, pin: string): Promise<void> => {
   pinLockMap.delete(userId)
 }
 
-export const verifyPin = async (userId: number, pin: string): Promise<void> => {
+/**
+ * 거래 PIN 검증.
+ *
+ * 인메모리 잠금(pinLockMap)은 서버 재시작 시 사라지고 성공하면 지워지므로, "반복 실패
+ * 후 성공"(M-5 크리덴셜 스터핑)을 판정할 근거가 남지 않는다. 그래서 시도 결과를
+ * trade_auth_attempts 에 영속 기록한다. ctx 는 그 기록에 필요한 요청 문맥이다.
+ * (기록은 실패해도 인증 흐름을 막지 않는다 — anomalyService 내부에서 오류를 흡수한다)
+ */
+export const verifyPin = async (
+  userId: number,
+  pin: string,
+  ctx?: { ip: string; userAgent?: string; email?: string },
+): Promise<void> => {
   const state = pinLockMap.get(userId)
 
   if (state?.lockedUntil && new Date() < state.lockedUntil) {
@@ -40,6 +62,17 @@ export const verifyPin = async (userId: number, pin: string): Promise<void> => {
   const user = await User.findByPk(userId)
   if (!user?.pin_hash) throw new Error('PIN이 설정되지 않았습니다')
   const ok = await bcrypt.compare(pin, user.pin_hash)
+
+  if (ctx) {
+    void recordTradeAuthAttempt({
+      userId,
+      method: 'PIN',
+      success: ok,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      email: ctx.email ?? user.email,
+    })
+  }
 
   if (!ok) {
     const current = pinLockMap.get(userId) ?? { count: 0, lockedUntil: null }
@@ -124,7 +157,54 @@ const getCurrentPrice = async (stockCode: string, stockId: number): Promise<numb
   return rows[0].close
 }
 
+// ─── 포트폴리오 평가액 ────────────────────────────────────────
+// 예수금 + 보유 종목 평가액. 실시간 시세가 없는 종목은 평균단가로 대체한다.
+// 이상탐지(M-1)의 비율 규칙과 고액 거래 판정이 같은 값을 쓰도록 여기서만 계산한다.
+
+export const getPortfolioValue = async (userId: number): Promise<number> => {
+  const account = await VirtualAccount.findOne({ where: { user_id: userId } })
+  if (!account) throw new Error('모의투자 계좌가 없습니다')
+
+  const rows = await sequelize.query<{ code: string; quantity: number; avg_price: string }>(
+    `SELECT s.code AS code, h.quantity AS quantity, h.avg_price AS avg_price
+       FROM virtual_holdings h
+       JOIN stocks s ON s.id = h.stock_id
+      WHERE h.user_id = :userId`,
+    { replacements: { userId }, type: QueryTypes.SELECT }
+  )
+
+  let stockValue = 0
+  for (const r of rows) {
+    const price = priceMap.get(r.code) ?? Number(r.avg_price)
+    if (Number.isFinite(price)) stockValue += price * Number(r.quantity)
+  }
+
+  const total = Number(account.seed_balance) + stockValue
+  return Number.isFinite(total) ? total : 0
+}
+
+// ─── 주문 평가 (체결가·주문금액·평가액) ───────────────────────
+// 시장가는 현재가를, 지정가는 지정가를 기준으로 한다. 이상탐지와 실제 체결이
+// 서로 다른 가격을 보지 않도록 buyStock/sellStock 과 동일한 가격 결정 규칙을 쓴다.
+
+export const getOrderValuation = async (params: {
+  userId: number
+  stockId: number
+  stockCode: string
+  quantity: number
+  orderType: 'market' | 'limit'
+  limitPrice?: number
+}): Promise<{ price: number; amount: number; portfolioValue: number }> => {
+  const price = params.orderType === 'market'
+    ? await getCurrentPrice(params.stockCode, params.stockId)
+    : Number(params.limitPrice)
+
+  const portfolioValue = await getPortfolioValue(params.userId)
+  return { price, amount: price * params.quantity, portfolioValue }
+}
+
 // ─── 고액 거래 판정 ───────────────────────────────────────────
+// 포트폴리오 평가액 대비 임계 비율 초과 여부. 임계는 이상탐지 정책과 공유한다.
 
 export const isLargeOrder = async (
   userId: number,
@@ -132,31 +212,15 @@ export const isLargeOrder = async (
   stockCode?: string,
   quantity?: number
 ): Promise<boolean> => {
-  const account = await VirtualAccount.findOne({ where: { user_id: userId } })
-  if (!account) throw new Error('모의투자 계좌가 없습니다')
-
   let actualAmount = tradeAmount
   if (actualAmount === 0 && stockCode && quantity) {
     const currentPrice = priceMap.get(stockCode)
     if (currentPrice) actualAmount = currentPrice * quantity
   }
 
-  const holdings = await VirtualHolding.findAll({ where: { user_id: userId } })
-  let stockValue = 0
-  for (const h of holdings) {
-    const rows = await sequelize.query<{ code: string }>(
-      `SELECT code FROM stocks WHERE id = :stockId LIMIT 1`,
-      { replacements: { stockId: h.stock_id }, type: QueryTypes.SELECT }
-    )
-    if (rows.length) {
-      const price = priceMap.get(rows[0].code) ?? Number(h.avg_price)
-      stockValue += price * h.quantity
-    }
-  }
-
-  const totalPortfolio = Number(account.seed_balance) + stockValue
+  const totalPortfolio = await getPortfolioValue(userId)
   const threshold = totalPortfolio > 0 ? totalPortfolio : INITIAL_BALANCE
-  return actualAmount > threshold * 0.2
+  return actualAmount > threshold * TRADE_POLICY.RATIO.STEP_UP
 }
 
 // ─── 매수 ─────────────────────────────────────────────────────
@@ -180,6 +244,8 @@ interface BuyParams {
 export const buyStock = async (params: BuyParams) => {
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
 
+  await assertNotCanary({ userId, code: 'CN-01', action: '모의투자 매수', ip: ipAddress, userAgent })
+
   const price = orderType === 'market'
     ? await getCurrentPrice(stockCode, stockId)
     : limitPrice!
@@ -192,7 +258,21 @@ export const buyStock = async (params: BuyParams) => {
   if (tradeSignature && wallet) {
     const nonce = await getTradeNonce(wallet.address)
     const verifyAmount = signedAmount ?? BigInt(Math.round(totalAmount))
-    await verifyTradeSignature(wallet.address, nonce, verifyAmount, stockCode, tradeSignature)
+    // 고액 거래 재인증(지갑 서명)의 성공·실패도 M-5 판정 대상이다. 서명 위조를 반복하다
+    // 결국 통과한 경우가 PIN 반복 실패 후 성공과 같은 성격의 신호이기 때문이다.
+    try {
+      await verifyTradeSignature(wallet.address, nonce, verifyAmount, stockCode, tradeSignature)
+    } catch (err) {
+      void recordTradeAuthAttempt({
+        userId, method: 'WALLET_SIGNATURE', success: false,
+        ip: ipAddress, userAgent,
+      })
+      throw err
+    }
+    void recordTradeAuthAttempt({
+      userId, method: 'WALLET_SIGNATURE', success: true,
+      ip: ipAddress, userAgent,
+    })
   }
 
   const t: Transaction = await sequelize.transaction()
@@ -274,6 +354,8 @@ interface SellParams {
 export const sellStock = async (params: SellParams) => {
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
 
+  await assertNotCanary({ userId, code: 'CN-02', action: '모의투자 매도', ip: ipAddress, userAgent })
+
   const price = orderType === 'market'
     ? await getCurrentPrice(stockCode, stockId)
     : limitPrice!
@@ -286,7 +368,21 @@ export const sellStock = async (params: SellParams) => {
   if (tradeSignature && wallet) {
     const nonce = await getTradeNonce(wallet.address)
     const verifyAmount = signedAmount ?? BigInt(Math.round(totalAmount))
-    await verifyTradeSignature(wallet.address, nonce, verifyAmount, stockCode, tradeSignature)
+    // 고액 거래 재인증(지갑 서명)의 성공·실패도 M-5 판정 대상이다. 서명 위조를 반복하다
+    // 결국 통과한 경우가 PIN 반복 실패 후 성공과 같은 성격의 신호이기 때문이다.
+    try {
+      await verifyTradeSignature(wallet.address, nonce, verifyAmount, stockCode, tradeSignature)
+    } catch (err) {
+      void recordTradeAuthAttempt({
+        userId, method: 'WALLET_SIGNATURE', success: false,
+        ip: ipAddress, userAgent,
+      })
+      throw err
+    }
+    void recordTradeAuthAttempt({
+      userId, method: 'WALLET_SIGNATURE', success: true,
+      ip: ipAddress, userAgent,
+    })
   }
 
   const t: Transaction = await sequelize.transaction()
@@ -368,7 +464,8 @@ export const sellStock = async (params: SellParams) => {
 
 // ─── 미체결 주문 조회 ─────────────────────────────────────────
 
-export const getPendingOrders = async (userId: number) => {
+export const getPendingOrders = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-04', action: '미체결 주문 조회', ...ctx })
   return sequelize.query<{
     id: number
     side: string
@@ -392,7 +489,8 @@ export const getPendingOrders = async (userId: number) => {
 
 // ─── 미체결 주문 취소 ─────────────────────────────────────────
 
-export const cancelOrder = async (userId: number, orderId: number): Promise<void> => {
+export const cancelOrder = async (userId: number, orderId: number, ctx?: AccessContext): Promise<void> => {
+  await assertNotCanary({ userId, code: 'CN-05', action: '미체결 주문 취소', ...ctx })
   const t: Transaction = await sequelize.transaction()
   try {
     const order = await VirtualOrder.findOne({
@@ -425,7 +523,8 @@ export const cancelOrder = async (userId: number, orderId: number): Promise<void
 
 // ─── 거래내역 조회 ────────────────────────────────────────────
 
-export const getOrders = async (userId: number) => {
+export const getOrders = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-06', action: '모의투자 거래내역 조회', ...ctx })
   return sequelize.query<{
     id: number; side: string; order_type: string; stock_name: string; stock_code: string;
     quantity: number; price: number; total_amount: number; status: string;
@@ -446,7 +545,9 @@ export const getOrders = async (userId: number) => {
 
 // ─── 포트폴리오 조회 ──────────────────────────────────────────
 
-export const getPortfolio = async (userId: number) => {
+export const getPortfolio = async (userId: number, ctx?: AccessContext) => {
+  await assertNotCanary({ userId, code: 'CN-03', action: '포트폴리오 조회', ...ctx })
+
   const account = await VirtualAccount.findOne({ where: { user_id: userId } })
   if (!account) return null
 

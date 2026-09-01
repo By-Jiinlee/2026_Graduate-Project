@@ -3,8 +3,9 @@ import { QueryTypes } from 'sequelize';
 import sequelize from '../../config/database';
 import StockPrice from '../../models/market/StockPrice';
 import { collectStockPrices } from '../../schedulers/market/StockPrice';
-import { priceMap, changeMap, changeRateMap, getRealtimeStatus } from '../../services/market/KisRealtime';
+import { priceMap, changeMap, changeRateMap, volumeMap, getRealtimeStatus } from '../../services/market/KisRealtime';
 import { fetchDayCandles, upsertMinuteCandles } from '../../services/market/MinuteCandle';
+import { fetchDailyPrices } from '../../services/market/StockPrice';
 
 /**
  * [GET] 전체 종목의 최신 시세 리스트 조회
@@ -60,6 +61,7 @@ export const getAllLatestPrices = async (_req: Request, res: Response): Promise<
                 price:      live,
                 change:     changeMap.get(row.code)     ?? row.change,
                 changeRate: changeRateMap.get(row.code) ?? row.changeRate,
+                volume:     volumeMap.get(row.code)     ?? row.volume,
             }
             return row
         })
@@ -102,7 +104,7 @@ export const getStockPrices = async (req: Request, res: Response): Promise<void>
 }
 
 /**
- * [GET] 종목 기본정보 + 최근 90일 일봉 (상세 페이지용)
+ * [GET] 종목 기본정보만 조회 (차트 데이터는 /history 엔드포인트 사용)
  * 주소: GET /api/market/stock-prices/:stockId/detail
  */
 export const getStockDetail = async (req: Request, res: Response): Promise<void> => {
@@ -137,20 +139,6 @@ export const getStockDetail = async (req: Request, res: Response): Promise<void>
             { replacements: { stockId }, type: QueryTypes.SELECT }
         )
 
-        const candles = await sequelize.query<{
-            time: string; open: number; high: number; low: number; close: number; volume: number;
-        }>(
-            `SELECT * FROM (
-                SELECT DATE_FORMAT(price_date, '%Y-%m-%d') AS time,
-                       open, high, low, close, volume
-                FROM stock_prices
-                WHERE stock_id = :stockId
-                ORDER BY price_date DESC
-                LIMIT 3650
-             ) t ORDER BY time ASC`,
-            { replacements: { stockId }, type: QueryTypes.SELECT }
-        )
-
         if (!info) { res.status(404).json({ success: false, message: '종목을 찾을 수 없습니다' }); return }
 
         // 실시간 시세가 있으면 가격/전일대비 모두 덮어씌우기
@@ -161,10 +149,68 @@ export const getStockDetail = async (req: Request, res: Response): Promise<void>
             info.changeRate = changeRateMap.get(info.code) ?? info.changeRate
         }
 
-        res.json({ success: true, info, candles })
+        res.json({ success: true, info })
     } catch (err) {
         console.error('[StockPrice] 상세 조회 오류:', err)
         res.status(500).json({ success: false, message: '상세 조회 실패' })
+    }
+}
+
+/**
+ * [GET] KIS에서 직접 과거 캔들 조회 (D/W/M 기간 지원)
+ * 주소: GET /api/market/stock-prices/:stockId/history?period_code=D|W|M&from=YYYYMMDD&to=YYYYMMDD
+ */
+export const getKisHistory = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { stockId } = req.params
+        const periodDivCode = ((req.query.period_code as string) || 'D') as 'D' | 'W' | 'M'
+        const from = req.query.from as string
+        const todayKst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '')
+        const to = (req.query.to as string) || todayKst
+
+        if (!from) {
+            res.status(400).json({ success: false, message: 'from 파라미터(YYYYMMDD) 필요' })
+            return
+        }
+
+        const [stock] = await sequelize.query<{ code: string }>(
+            'SELECT code FROM stocks WHERE id = :stockId',
+            { replacements: { stockId }, type: QueryTypes.SELECT }
+        )
+        if (!stock) { res.status(404).json({ success: false, message: '종목 없음' }); return }
+
+        const prices = await fetchDailyPrices(stock.code, from, to, periodDivCode)
+
+        let candles = prices
+            .map(p => ({
+                time:   `${p.date.slice(0, 4)}-${p.date.slice(4, 6)}-${p.date.slice(6, 8)}`,
+                open:   p.open,
+                high:   p.high,
+                low:    p.low,
+                close:  p.close,
+                volume: p.volume,
+            }))
+            .sort((a, b) => a.time.localeCompare(b.time))
+
+        // 주봉(W) 빈 배열이면 월봉(M)으로 재시도
+        if (candles.length === 0 && periodDivCode === 'W') {
+            const mPrices = await fetchDailyPrices(stock.code, from, to, 'M')
+            candles = mPrices
+                .map(p => ({
+                    time:   `${p.date.slice(0, 4)}-${p.date.slice(4, 6)}-${p.date.slice(6, 8)}`,
+                    open:   p.open,
+                    high:   p.high,
+                    low:    p.low,
+                    close:  p.close,
+                    volume: p.volume,
+                }))
+                .sort((a, b) => a.time.localeCompare(b.time))
+        }
+
+        res.json({ success: true, candles })
+    } catch (err) {
+        console.error('[KisHistory] 조회 오류:', err)
+        res.status(500).json({ success: false, message: 'KIS 히스토리 조회 실패' })
     }
 }
 
@@ -177,38 +223,59 @@ export const getMinuteCandles = async (req: Request, res: Response): Promise<voi
         const { stockId } = req.params
         const interval = parseInt((req.query.interval as string) ?? '1')
 
-        const todayStr = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+        // date 파라미터: YYYYMMDD 형식. 없으면 오늘(KST)
+        const dateParam = req.query.date as string | undefined
+        let targetDate: string   // YYYY-MM-DD (DB용)
+        let targetDateKis: string // YYYYMMDD (KIS API용)
+        if (dateParam) {
+            const d = dateParam.replace(/-/g, '')
+            targetDateKis = d
+            targetDate = `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`
+        } else {
+            const nowKst = new Date(Date.now() + 9 * 3600 * 1000)
+            targetDate    = nowKst.toISOString().slice(0, 10)
+            targetDateKis = targetDate.replace(/-/g, '')
+        }
 
-        // 오늘 데이터 DB에 있는지 확인
-        const [todayCheck] = await sequelize.query<{ cnt: number }>(
+        // DB에 해당 날짜 데이터가 있는지 확인
+        const [dateCheck] = await sequelize.query<{ cnt: number }>(
             `SELECT COUNT(*) AS cnt FROM stock_minute_candles
-             WHERE stock_id = :stockId AND interval_min = :interval AND DATE(candle_time) = :today`,
-            { replacements: { stockId, interval, today: todayStr }, type: QueryTypes.SELECT }
+             WHERE stock_id = :stockId AND interval_min = :interval AND DATE(candle_time) = :targetDate`,
+            { replacements: { stockId, interval, targetDate }, type: QueryTypes.SELECT }
         )
 
-        // 오늘 데이터가 없고 장 시간(09:00~16:00 KST)이면 KIS API에서 직접 가져오기
-        if (Number(todayCheck.cnt) === 0) {
-            const kstHour = new Date().getUTCHours() + 9  // KST = UTC+9
-            const isMarketHours = kstHour >= 9 && kstHour < 16
+        // DB에 없으면 KIS에서 수집
+        // - 오늘 + 장중: 현재 시간까지만
+        // - 과거 날짜(weekday): 종가 기준 전체 수집
+        if (Number(dateCheck.cnt) === 0) {
+            const [stockRow] = await sequelize.query<{ code: string }>(
+                `SELECT code FROM stocks WHERE id = :stockId`,
+                { replacements: { stockId }, type: QueryTypes.SELECT }
+            )
+            if (stockRow) {
+                const nowKst   = new Date(Date.now() + 9 * 3600 * 1000)
+                const todayKst = nowKst.toISOString().slice(0, 10).replace(/-/g, '')
+                const isToday  = targetDateKis === todayKst
+                const kstHour  = nowKst.getUTCHours() * 60 + nowKst.getUTCMinutes()
+                const isMarket = kstHour >= 9 * 60 && kstHour < 15 * 60 + 30
 
-            if (isMarketHours) {
-                const [stockRow] = await sequelize.query<{ code: string }>(
-                    `SELECT code FROM stocks WHERE id = :stockId`,
-                    { replacements: { stockId }, type: QueryTypes.SELECT }
-                )
-                if (stockRow) {
-                    const nowKst = new Date(Date.now() + 9 * 3600 * 1000)
-                    const todayKst = nowKst.toISOString().slice(0, 10).replace(/-/g, '')
-                    const startHour = `${String(nowKst.getUTCHours()).padStart(2, '0')}${String(nowKst.getUTCMinutes()).padStart(2, '0')}00`
-                    const rows = await fetchDayCandles(stockRow.code, todayKst, startHour).catch(() => [])
-                    if (rows.length > 0) {
-                        await upsertMinuteCandles(Number(stockId), todayKst, rows)
-                    }
+                let startHour: string | undefined
+                if (isToday && isMarket) {
+                    startHour = `${String(nowKst.getUTCHours()).padStart(2,'0')}${String(nowKst.getUTCMinutes()).padStart(2,'0')}00`
+                }
+                // 오늘(장 외) 또는 과거 날짜: startHour 없이 15:30(종가)부터 역방향 전체 수집
+                const rows = await fetchDayCandles(stockRow.code, targetDateKis, startHour).catch(() => [])
+                if (rows.length > 0) {
+                    await upsertMinuteCandles(Number(stockId), targetDateKis, rows)
                 }
             }
         }
 
-        // 분봉 데이터가 있는 가장 최근 날짜 기준으로 조회
+        // 해당 날짜 분봉 반환 (date 파라미터 있을 때는 그 날짜 고정, 없으면 최근일)
+        const whereDate = dateParam
+            ? ':targetDate'
+            : `(SELECT DATE(MAX(candle_time)) FROM stock_minute_candles WHERE stock_id = :stockId AND interval_min = :interval)`
+
         const candles = await sequelize.query<{
             time: string; open: number; high: number; low: number; close: number; volume: number;
         }>(
@@ -217,12 +284,9 @@ export const getMinuteCandles = async (req: Request, res: Response): Promise<voi
              FROM stock_minute_candles
              WHERE stock_id = :stockId
                AND interval_min = :interval
-               AND DATE(candle_time) = (
-                   SELECT DATE(MAX(candle_time)) FROM stock_minute_candles
-                   WHERE stock_id = :stockId AND interval_min = :interval
-               )
+               AND DATE(candle_time) = ${whereDate}
              ORDER BY candle_time ASC`,
-            { replacements: { stockId, interval }, type: QueryTypes.SELECT }
+            { replacements: { stockId, interval, targetDate }, type: QueryTypes.SELECT }
         )
 
         res.json({ success: true, candles })
