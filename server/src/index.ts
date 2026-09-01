@@ -92,29 +92,35 @@ httpServer.listen(PORT, () => {
     //
     // 기동 직후 1회 수집은 기본으로 꺼져 있다(RUN_INITIAL_COLLECT). 재배포·재시작이
     // 잦은 환경에서 그때마다 전종목 수집이 처음부터 도는 것을 막기 위함이다.
+    //
+    // 수집은 배포된 서버 한 곳에서만 돌아야 한다. 로컬에서 개발용으로 서버를 띄우면
+    // 같은 크론이 두 곳에서 발화해 같은 일을 두 번 하게 되므로, 로컬 .env 에
+    // DISABLE_SCHEDULERS=true 를 넣어 끈다. (.env 는 gitignore 라 배포에 안 섞인다 —
+    // 소스를 주석 처리하면 커밋에 딸려가 배포 서버까지 멈춘다.)
+    if (process.env.DISABLE_SCHEDULERS === 'true') {
+        console.log('[Scheduler] 수집 스케줄러 전체 비활성 (DISABLE_SCHEDULERS=true)')
+    } else {
+        // KIS 사용 — 순차 실행
+        // ⚠️ KIS 수집기 전체 일시 중단 — 로컬에서 분봉을 수동 수집하는 동안
+        //    같은 앱키를 나눠 쓰면 양쪽 다 유량 초과로 실패한다.
+        //    로컬 수집 + 수급 백필이 끝나면 아래 다섯 줄을 모두 되살릴 것.
+        //startStockPriceScheduler()            // 일봉        평일 16:00
+        //startShortSellingScheduler()          // 공매도      평일 16:20
+        //startForeignAndInstitutionalScheduler() // 수급      평일 17:35
+        //startMinuteCandleScheduler()          // 분봉        평일 08:00 / 19:20
+        //startListedSharesScheduler()          // 상장주식수  매주 월 07:00 (KIS)
 
-    // KIS 사용 — 순차 실행
-    // ⚠️ KIS 수집기 전체 일시 중단 — 로컬에서 분봉을 수동 수집하는 동안
-    //    같은 앱키를 나눠 쓰면 양쪽 다 유량 초과로 실패한다.
-    //    로컬 수집 + 수급 백필이 끝나면 아래 네 줄을 모두 되살릴 것.
-    //startStockPriceScheduler()            // 일봉        평일 16:00
-    //startShortSellingScheduler()          // 공매도      평일 16:20
-    //startForeignAndInstitutionalScheduler() // 수급      평일 17:35
-    // 분봉은 로컬에서 수동 수집 중이라 잠시 중단한다. 같은 KIS 앱키를 쓰므로
-    // 양쪽이 동시에 돌면 유량 초과로 서로 실패한다. 로컬 수집이 끝나면 되살릴 것.
-    //startMinuteCandleScheduler()          // 분봉        평일 08:00 / 19:20
-    //startListedSharesScheduler()          // 상장주식수  매주 월 07:00 (KIS)
+        // 외부 API — KIS 와 무관
+        startMarketIndexScheduler()             // 미국지수    평일 18:00 (Yahoo)
+        startCommodityScheduler()               // 원자재      평일 18:00 (Yahoo)
+        startEcosIndicatorScheduler()           // 거시경제    평일 18:00 (ECOS)
+        startFinancialStatementScheduler()      // 재무제표    분기 1회 (DART)
 
-    // 외부 API — KIS 와 무관
-    startMarketIndexScheduler()             // 미국지수    평일 18:00 (Yahoo)
-    startCommodityScheduler()               // 원자재      평일 18:00 (Yahoo)
-    startEcosIndicatorScheduler()           // 거시경제    평일 18:00 (ECOS)
-    startFinancialStatementScheduler()      // 재무제표    분기 1회 (DART)
+        // DB 계산 — 수집이 끝난 뒤 실행
+        startStock52WeekScheduler()             // 52주 신고저 평일 19:50
 
-    // DB 계산 — 수집이 끝난 뒤 실행
-    startStock52WeekScheduler()             // 52주 신고저 평일 19:50
-
-    //startStabilityScheduler() //안정성 계산 — AI 피처에 쓰이지 않아 보류
+        //startStabilityScheduler() //안정성 계산 — AI 피처에 쓰이지 않아 보류
+    }
 
     // 실시간 시세 (온디맨드 폴링 항상 활성, 전종목 크롤링은 ENABLE_FULL_CRAWL=true 필요)
     startKisRealtime(io).catch(err => console.error('[KisRealtime] 시작 실패:', err.message))
