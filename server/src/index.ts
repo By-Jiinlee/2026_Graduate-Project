@@ -94,13 +94,16 @@ httpServer.listen(PORT, () => {
     // 잦은 환경에서 그때마다 전종목 수집이 처음부터 도는 것을 막기 위함이다.
 
     // KIS 사용 — 순차 실행
-    startStockPriceScheduler()              // 일봉        평일 16:00
-    startShortSellingScheduler()            // 공매도      평일 16:20
-    startForeignAndInstitutionalScheduler() // 수급        평일 17:35
+    // ⚠️ KIS 수집기 전체 일시 중단 — 로컬에서 분봉을 수동 수집하는 동안
+    //    같은 앱키를 나눠 쓰면 양쪽 다 유량 초과로 실패한다.
+    //    로컬 수집 + 수급 백필이 끝나면 아래 네 줄을 모두 되살릴 것.
+    //startStockPriceScheduler()            // 일봉        평일 16:00
+    //startShortSellingScheduler()          // 공매도      평일 16:20
+    //startForeignAndInstitutionalScheduler() // 수급      평일 17:35
     // 분봉은 로컬에서 수동 수집 중이라 잠시 중단한다. 같은 KIS 앱키를 쓰므로
     // 양쪽이 동시에 돌면 유량 초과로 서로 실패한다. 로컬 수집이 끝나면 되살릴 것.
     //startMinuteCandleScheduler()          // 분봉        평일 08:00 / 19:20
-    startListedSharesScheduler()            // 상장주식수  매주 월 07:00
+    //startListedSharesScheduler()          // 상장주식수  매주 월 07:00 (KIS)
 
     // 외부 API — KIS 와 무관
     startMarketIndexScheduler()             // 미국지수    평일 18:00 (Yahoo)
