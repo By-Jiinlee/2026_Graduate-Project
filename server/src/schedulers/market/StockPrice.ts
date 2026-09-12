@@ -10,20 +10,27 @@ import {
 import { kisUnsupported, markUnsupported } from '../../utils/kisUnsupported'
 import { runInitialCollect } from '../../utils/initialCollect'
 
-export const collectStockPrices = async () => {
+/**
+ * @param force  주말·완료 여부 체크를 건너뛴다. 크론은 평일 장 마감 후에만 돌아야 하지만,
+ *               수동 실행(CLI)은 "지금 받겠다"는 명시적 의도이므로 주말에도 밀린 구간을
+ *               따라잡을 수 있어야 한다. KIS 기간별시세는 요일과 무관하게 응답한다.
+ */
+export const collectStockPrices = async (opts: { force?: boolean } = {}) => {
     const today = getToday();
 
-    // ① 주말이면 즉시 종료
-    const dow = new Date().getDay()
-    if (dow === 0 || dow === 6) {
-        console.log('[StockPrice] 주말 - 수집 스킵');
-        return;
-    }
+    if (!opts.force) {
+        // ① 주말이면 즉시 종료
+        const dow = new Date().getDay()
+        if (dow === 0 || dow === 6) {
+            console.log('[StockPrice] 주말 - 수집 스킵');
+            return;
+        }
 
-    // ② 오늘 데이터 전종목 완료 여부 빠른 체크
-    if (await isTodayComplete(today)) {
-        console.log(`[StockPrice] 오늘(${today}) 데이터 이미 완료 - 수집 스킵`);
-        return;
+        // ② 오늘 데이터 전종목 완료 여부 빠른 체크
+        if (await isTodayComplete(today)) {
+            console.log(`[StockPrice] 오늘(${today}) 데이터 이미 완료 - 수집 스킵`);
+            return;
+        }
     }
 
     console.log('[StockPrice] 일봉 데이터 수집을 시작합니다.');
@@ -80,3 +87,21 @@ export const startStockPriceScheduler = () => {
 
     runInitialCollect('StockPrice', async () => { await collectStockPrices() });
 };
+
+// ─── CLI (서버와 분리해 단독 실행) ────────────────────────────
+// 주말·장외에도 밀린 구간을 따라잡을 수 있게 force 로 돈다.
+// 종목별 마지막 저장일 ~ 오늘을 범위로 요청하므로 꼬리 구멍은 자동으로 메워진다.
+// (KIS 응답이 100건 제한이라 5개월 이상 밀리면 잘린다 — 그 전에 돌릴 것)
+//   cd server && npx ts-node src/schedulers/market/StockPrice.ts
+if (require.main === module) {
+    collectStockPrices({ force: true })
+        .then(async () => {
+            const sequelize = (await import('../../config/database')).default
+            await sequelize.close()
+            process.exit(0)
+        })
+        .catch((err) => {
+            console.error('[StockPrice] 실행 실패:', err?.message ?? err)
+            process.exit(1)
+        })
+}

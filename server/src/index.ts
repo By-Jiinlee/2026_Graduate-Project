@@ -104,7 +104,7 @@ httpServer.listen(PORT, () => {
         // ⚠️ KIS 수집기 전체 일시 중단 — 로컬에서 분봉을 수동 수집하는 동안
         //    같은 앱키를 나눠 쓰면 양쪽 다 유량 초과로 실패한다.
         //    로컬 수집 + 수급 백필이 끝나면 아래 다섯 줄을 모두 되살릴 것.
-        //startStockPriceScheduler()            // 일봉        평일 16:00
+        startStockPriceScheduler()            // 일봉        평일 16:00
         //startShortSellingScheduler()          // 공매도      평일 16:20
         //startForeignAndInstitutionalScheduler() // 수급      평일 17:35
         //startMinuteCandleScheduler()          // 분봉        평일 08:00 / 19:20
