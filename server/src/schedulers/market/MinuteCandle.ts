@@ -126,3 +126,19 @@ export const startMinuteCandleScheduler = (): void => {
     // 부팅 직후 누락분 백필 (요일 무관)
     runInitialCollect('MinuteCandle', collectMinuteCandles)
 }
+// ─── CLI (서버와 분리해 단독 실행) ────────────────────────────
+// 종목별 마지막 분봉 날짜 이후를 하루씩 따라잡는다. 주말 날짜는 건너뛰므로
+// 실행 요일과 무관하게 돌릴 수 있다. 밀린 날이 많으면 오래 걸린다(종목×일 단위 호출).
+//   cd server && npx ts-node src/schedulers/market/MinuteCandle.ts
+if (require.main === module) {
+    collectMinuteCandles()
+        .then(async () => {
+            const sequelize = (await import('../../config/database')).default
+            await sequelize.close()
+            process.exit(0)
+        })
+        .catch((err) => {
+            console.error('[MinuteCandle] 실행 실패:', err?.message ?? err)
+            process.exit(1)
+        })
+}
