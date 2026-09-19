@@ -320,7 +320,6 @@ export async function collectRiskSignals(params: {
     if ((LOGGED_TYPES as readonly string[]).includes(a)) found.add(a as RiskSignal)
   }
   if (params.behaviorData) {
-    console.log('[디버깅] 넘어온 행동 데이터:', params.behaviorData);
     const { mouseMoveCount, avgTypingInterval, timeOnPage } = params.behaviorData;
     if (timeOnPage > 500 && mouseMoveCount === 0) {
       console.info(`[RiskEngine] 마우스 움직임 없음 감지 (IP: ${params.ip}) -> 점수 부여`);
