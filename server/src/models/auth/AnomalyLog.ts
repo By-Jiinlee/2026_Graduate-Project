@@ -2,7 +2,8 @@ import { DataTypes, Model, Optional } from 'sequelize'
 import sequelize from '../../config/database'
 
 // DB 마이그레이션: src/database/migrations/20260730_anomaly_type_hmac.sql, 20260730_inference_logs.sql,
-//                  20260801_anomaly_type_trade.sql, 20260826_anomaly_type_canary.sql
+//                  20260801_anomaly_type_trade.sql, 20260826_anomaly_type_canary.sql,
+//                  20260929_anomaly_type_bot_behavior.sql
 export type AnomalyType =
   | 'BRUTE_FORCE'
   | 'ABNORMAL_TIME'
@@ -27,6 +28,8 @@ export type AnomalyType =
   | 'ROUND_AMOUNT_PATTERN'     // M-8 반올림 금액 반복 — 자동화 신호
   | 'ADAPTIVE_STEPUP'          // H  위험 점수로 추가 인증이 요구된 판정
   | 'CANARY_ACCESS'            // 기만 기술 — 미끼(카나리) 계좌 진입점 접근
+  | 'BOT_BEHAVIOR_MOUSE'       // 로그인 폼 체류 중 마우스 이동 0회 (관측 신호)
+  | 'BOT_BEHAVIOR_TYPING'      // 로그인 폼 평균 타자 간격 50ms 미만 (관측 신호)
 export type AnomalyAction = 'ALERT' | 'BLOCK' | 'LOCK'
 
 interface AnomalyLogAttributes {
@@ -93,6 +96,8 @@ AnomalyLog.init(
         'ROUND_AMOUNT_PATTERN',
         'ADAPTIVE_STEPUP',
         'CANARY_ACCESS',
+        'BOT_BEHAVIOR_MOUSE',
+        'BOT_BEHAVIOR_TYPING',
       ),
       allowNull: false,
     },

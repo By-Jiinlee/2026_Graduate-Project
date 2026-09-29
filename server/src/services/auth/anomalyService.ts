@@ -578,6 +578,45 @@ export async function logAnomaly(params: {
 }
 
 // ─────────────────────────────────────────────
+// 행동 기반 봇 신호 기록 (로그인 1단계)
+//
+// 봇 신호는 1단계 요청의 behaviorData 로만 판정할 수 있다. 여기서 기록해 두어야
+// 2단계가 위험 점수를 재계산할 때 이력으로 같은 신호를 읽는다. 기록이 없으면
+// 1단계 안내값에만 반영되고 서버 강제에서는 빠져, 안내를 무시하는 스크립트가 통과한다.
+// 관측 신호(오탐률이 높음)라 이메일 경보는 보내지 않고 ALERT 로만 남긴다.
+// 호출부는 반드시 await 한다 — 응답 후 기록하면 곧바로 이어지는 2단계가 기록보다 먼저 도착할 수 있다.
+// ─────────────────────────────────────────────
+export async function recordBotBehavior(params: {
+  userId: number
+  email: string
+  ip: string
+  userAgent?: string
+  signals: readonly ('BOT_BEHAVIOR_MOUSE' | 'BOT_BEHAVIOR_TYPING')[]
+  metrics: { mouseMoveCount: number; avgTypingInterval: number; timeOnPage: number }
+}): Promise<void> {
+  const m = params.metrics
+  const describe: Record<string, string> = {
+    BOT_BEHAVIOR_MOUSE: `로그인 폼 체류 ${Math.round(m.timeOnPage)}ms 동안 마우스 이동 0회`,
+    BOT_BEHAVIOR_TYPING: `로그인 폼 평균 타자 간격 ${Math.round(m.avgTypingInterval)}ms (사람의 입력 속도보다 빠름)`,
+  }
+  for (const signal of params.signals) {
+    try {
+      await logAnomaly({
+        userId: params.userId,
+        email: params.email,
+        ip: params.ip,
+        userAgent: params.userAgent,
+        type: signal,
+        action: 'ALERT',
+        detail: `[봇 행동 · 관측] ${describe[signal]} — 위험 점수 관측 그룹(상한 20점)에 반영`,
+      })
+    } catch (err) {
+      console.error('[Anomaly] 봇 행동 신호 기록 오류:', err)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
 // 요청 서명(HMAC) 검증 실패 탐지
 //
 // hmacMiddleware 에서 호출한다. 응답 지연을 막기 위해 호출부는 await 하지 않고

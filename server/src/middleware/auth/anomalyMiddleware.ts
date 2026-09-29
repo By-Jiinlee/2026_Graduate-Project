@@ -1,10 +1,16 @@
 import { Request, Response, NextFunction } from 'express'
-import { analyzeLoginAttempt, isAccountLocked } from '../../services/auth/anomalyService'
+import { analyzeLoginAttempt, isAccountLocked, recordBotBehavior } from '../../services/auth/anomalyService'
 import { checkIPAbuse } from '../../services/auth/abuseIPDBService'
 import { blockIP } from '../security/ipBlockMiddleware'
 import AnomalyLog from '../../models/auth/AnomalyLog'
 import { getClientIp } from '../../utils/getClientIp'
-import { assessRisk, collectRiskSignals, decideAuthRequirement } from '../../services/auth/riskEngine'
+import {
+  assessRisk,
+  collectRiskSignals,
+  decideAuthRequirement,
+  detectBotBehavior,
+  parseBehaviorData,
+} from '../../services/auth/riskEngine'
 
 // ─────────────────────────────────────────────
 // 0. AbuseIPDB — 알려진 악성 IP 차단
@@ -151,6 +157,18 @@ export async function analyzeAfterLogin(
           abuseScore: res.locals.abuseScore,
           behaviorData: res.locals.behaviorData
         })
+        const behavior = parseBehaviorData(res.locals.behaviorData)
+        const botSignals = behavior ? detectBotBehavior(behavior) : []
+        if (behavior && botSignals.length > 0) {
+          await recordBotBehavior({
+            userId: loginUserId,
+            email: loginEmail ?? '',
+            ip,
+            userAgent: req.headers['user-agent'],
+            signals: botSignals,
+            metrics: behavior,
+          })
+        }
         const risk = assessRisk(collected.signals)
         const decision = decideAuthRequirement({
           isTrustedDevice: res.locals.isTrustedDevice === true,

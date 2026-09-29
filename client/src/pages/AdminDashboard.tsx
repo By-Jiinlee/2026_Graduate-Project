@@ -30,6 +30,8 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   MULTI_ACCOUNT_SAME_IP: { label: '동일IP 다계정(관측)', color: '#607d8b' },
   ADAPTIVE_STEPUP:    { label: '적응형 재인증',   color: '#00695c' },
   CANARY_ACCESS:      { label: '카나리 계좌',     color: '#880e4f' },
+  BOT_BEHAVIOR_MOUSE:  { label: '봇 행동-마우스(관측)', color: '#455a64' },
+  BOT_BEHAVIOR_TYPING: { label: '봇 행동-타자(관측)',   color: '#37474f' },
 }
 
 const ACTION_META: Record<string, { label: string; color: string }> = {

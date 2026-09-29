@@ -105,7 +105,7 @@ export const RISK_POLICY = {
   /**
    * 관측 신호로 분류되는 집합과 그 합계 상한.
    *
-   * CAP(20)은 PIN 임계(31)보다 낮게 잡는다 — 관측 신호가 세 개 모두 서도
+   * CAP(20)은 재인증 임계(31)보다 낮게 잡는다 — 관측 신호가 전부 서도
    * 단독으로는 어떤 재인증도 유발하지 못한다는 뜻이다. 차단 신호와 함께 설 때만
    * 등급을 밀어 올리는 보조 역할을 한다.
    */
@@ -287,7 +287,54 @@ const LOGGED_TYPES: readonly RiskSignal[] = [
   'IMPOSSIBLE_TRAVEL', 'CREDENTIAL_STUFFING', 'REQUEST_TAMPERING', 'REPLAY_ATTACK',
   'ABNORMAL_TRADE_AMOUNT', 'POST_CHANGE_TRADE', 'DORMANT_ACCOUNT_ACTIVITY',
   'TRADE_FREQUENCY_SPIKE', 'MULTI_ACCOUNT_SAME_IP', 'ROUND_AMOUNT_PATTERN',
+  // 봇 신호는 1단계에서만 behaviorData 로 판정할 수 있다. 기록을 거쳐야 2단계(강제 지점)가 같은 신호를 본다.
+  'BOT_BEHAVIOR_MOUSE', 'BOT_BEHAVIOR_TYPING',
 ]
+
+// ─── 행동 기반 봇 신호 ─────────────────────────────────────────
+export const BOT_POLICY = {
+  /** 이 시간(ms)을 넘게 머물렀는데 마우스가 한 번도 움직이지 않았으면 MOUSE 신호 */
+  MOUSE_MIN_TIME_ON_PAGE_MS: 500,
+  /** 평균 타자 간격(ms)이 0 초과 이 값 미만이면 TYPING 신호 (0 은 키 입력 없음 — 자동완성 등) */
+  TYPING_MAX_INTERVAL_MS: 50,
+  /** 비현실적으로 큰 값은 조작·오류로 보고 판정하지 않는다 */
+  MAX_COUNT: 1_000_000,
+  MAX_MS: 24 * 3_600_000,
+} as const
+
+export type BotSignal = 'BOT_BEHAVIOR_MOUSE' | 'BOT_BEHAVIOR_TYPING'
+
+export interface BehaviorMetrics {
+  mouseMoveCount: number
+  avgTypingInterval: number
+  timeOnPage: number
+}
+
+/**
+ * 클라이언트가 보낸 behaviorData 를 검증한다. 형식이 맞지 않으면 null — 판정도 기록도 하지 않는다.
+ * 이 값은 사용자가 임의로 조작할 수 있고 anomaly_logs 의 detail 문구에 들어가므로,
+ * 유한한 숫자 범위만 통과시켜 로그 오염 경로를 막는다.
+ */
+export function parseBehaviorData(raw: unknown): BehaviorMetrics | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  const num = (v: unknown, max: number): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : null
+  const mouseMoveCount = num(r.mouseMoveCount, BOT_POLICY.MAX_COUNT)
+  const avgTypingInterval = num(r.avgTypingInterval, BOT_POLICY.MAX_MS)
+  const timeOnPage = num(r.timeOnPage, BOT_POLICY.MAX_MS)
+  if (mouseMoveCount === null || avgTypingInterval === null || timeOnPage === null) return null
+  if (!Number.isInteger(mouseMoveCount)) return null
+  return { mouseMoveCount, avgTypingInterval, timeOnPage }
+}
+
+/** 검증된 지표로 봇 신호를 판정한다(순수 함수). */
+export function detectBotBehavior(m: BehaviorMetrics): BotSignal[] {
+  const out: BotSignal[] = []
+  if (m.timeOnPage > BOT_POLICY.MOUSE_MIN_TIME_ON_PAGE_MS && m.mouseMoveCount === 0) out.push('BOT_BEHAVIOR_MOUSE')
+  if (m.avgTypingInterval > 0 && m.avgTypingInterval < BOT_POLICY.TYPING_MAX_INTERVAL_MS) out.push('BOT_BEHAVIOR_TYPING')
+  return out
+}
 
 export interface CollectedSignals {
   signals: RiskSignal[]
@@ -306,11 +353,8 @@ export async function collectRiskSignals(params: {
   ip: string
   loginAnomalies?: readonly string[]
   abuseScore?: number
-  behaviorData?: {
-    mouseMoveCount: number;
-    avgTypingInterval: number;
-    timeOnPage: number;
-  }
+  /** 1단계에서만 넘어온다. 2단계는 1단계가 anomaly_logs 에 남긴 봇 신호를 이력으로 읽는다. */
+  behaviorData?: unknown
 }): Promise<CollectedSignals> {
   const found = new Set<RiskSignal>()
   let degraded = false
@@ -319,17 +363,8 @@ export async function collectRiskSignals(params: {
   for (const a of params.loginAnomalies ?? []) {
     if ((LOGGED_TYPES as readonly string[]).includes(a)) found.add(a as RiskSignal)
   }
-  if (params.behaviorData) {
-    const { mouseMoveCount, avgTypingInterval, timeOnPage } = params.behaviorData;
-    if (timeOnPage > 500 && mouseMoveCount === 0) {
-      console.info(`[RiskEngine] 마우스 움직임 없음 감지 (IP: ${params.ip}) -> 점수 부여`);
-      found.add('BOT_BEHAVIOR_MOUSE');
-    }
-    if (avgTypingInterval > 0 && avgTypingInterval < 50) {
-      console.info(`[RiskEngine] 비정상적 타자 속도 감지 (IP: ${params.ip}) -> 점수 부여`);
-      found.add('BOT_BEHAVIOR_TYPING');
-    }
-  }
+  const behavior = parseBehaviorData(params.behaviorData)
+  if (behavior) for (const b of detectBotBehavior(behavior)) found.add(b)
 
   // 2) 위협 인텔 — 이미 호출된 점수를 재사용한다
   if ((params.abuseScore ?? 0) >= COLLECT_POLICY.ABUSE_SIGNAL_MIN) found.add('ABUSE_IP')
