@@ -7,6 +7,7 @@ import helmet from 'helmet'
 import cookieParser from 'cookie-parser'
 import morgan from 'morgan'
 import { connectDB } from './config/database'
+import { verifyCanaryBindings } from './services/security/canaryService'
 import { corsOptions, socketCorsOptions, describeCorsPolicy } from './config/cors'
 import { initUserChannels } from './services/socket/userChannel'
 import authRouter from './routes/auth/authRouter'
@@ -79,8 +80,8 @@ app.use('/api/ai', predictionRouter)
 app.use('/api/market/stock-prices', stockPriceRouter)
 app.use('/api/market/ecos', ecosIndicatorRouter)
 
-// DB 연결
-connectDB()
+// DB 연결 — 카나리 바인딩은 DB 조회가 필요하므로 연결 뒤에 검증한다
+connectDB().then(() => verifyCanaryBindings())
 
 // 서버 실행
 httpServer.listen(PORT, () => {

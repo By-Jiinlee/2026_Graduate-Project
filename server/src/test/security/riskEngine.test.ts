@@ -12,7 +12,7 @@ import {
 //
 // 적응형 인증에서 가장 위험한 실패는 "편해지려다 약해지는 것" 이다. 그래서 이 검증의
 // 1순위는 탐지율이 아니라 **기존 정책 대비 약해지는 경로가 하나도 없다는 증명**이다.
-// 신호 전 조합(2^16 = 65,536가지)을 전수 대조해 확인한다.
+// 신호 전 조합(2^N, N = 등록된 신호 수)을 표본 추출 없이 전수 대조해 확인한다.
 //
 //   1) 전수 검사 — 모든 신호 조합에서 새 정책이 기존 정책보다 약해지지 않는가
 //   2) 관측 신호(M-6/M-7/M-8)만으로는 재인증이 절대 발생하지 않는가
@@ -54,25 +54,32 @@ console.log(
 )
 
 // ── 1) ★ 전수 검사 — 기존 정책보다 약해지는 조합이 있는가 ────────
-//     신호 16종의 모든 부분집합 × 신뢰기기 2 × degraded 2 = 262,144 경우.
+//     신호 N종의 모든 부분집합 × 신뢰기기 2 × degraded 2 = 2^N × 4 경우.
 //     재인증 수단이 지갑 서명 하나뿐이므로 '어떤 수단으로 빠지는가' 축은 존재하지 않는다.
+//
+//     무작위 표본으로 바꾸지 않는다. 이 검사의 주장은 "약해지는 조합이 없다" 는 존재 부정이라
+//     표본으로는 증명이 되지 않는다(뽑히지 않은 조합에 반례가 있을 수 있다). 순수 계산이라
+//     신호 18종(1,048,576경우)도 수 초면 끝난다.
+//     비트마스크가 32비트 정수라 30종을 넘기면 시프트가 깨진다 — 그때는 조용히 틀리지 말고 멈춘다.
+if (ALL_SIGNALS.length > 30) {
+  throw new Error(`신호 ${ALL_SIGNALS.length}종 — 비트마스크 전수 열거 한계(30종) 초과, 열거 방식 재설계 필요`)
+}
+const subsetCount = 1 << ALL_SIGNALS.length
+const signalsOf = (mask: number): RiskSignal[] => {
+  const signals: RiskSignal[] = []
+  for (let i = 0; i < ALL_SIGNALS.length; i++) {
+    if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
+  }
+  return signals
+}
+
 let total = 0
 let weaker = 0
 let stronger = 0
 let sameCount = 0
 let nonWalletReauth = 0
-const TOTAL_POSSIBLE = 1 << ALL_SIGNALS.length
-const MAX_SAMPLES = 65536
-const isExhaustive = TOTAL_POSSIBLE <= MAX_SAMPLES
-const subsetCount = isExhaustive ? TOTAL_POSSIBLE : MAX_SAMPLES
-
-for (let iter = 0; iter < subsetCount; iter++) {
-  const mask = isExhaustive ? iter : Math.floor(Math.random() * TOTAL_POSSIBLE)
-  const signals: RiskSignal[] = []
-  for (let i = 0; i < ALL_SIGNALS.length; i++) {
-    if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
-  }
-  const risk = assessRisk(signals)
+for (let mask = 0; mask < subsetCount; mask++) {
+  const risk = assessRisk(signalsOf(mask))
   for (const isTrusted of [true, false]) {
     for (const degraded of [false, true]) {
       total++
@@ -93,6 +100,8 @@ for (let iter = 0; iter < subsetCount; iter++) {
 check('전수 검사: 기존보다 약해지는 조합 0', weaker === 0, `${weaker}/${total}`)
 check('전수 검사: 지갑 서명 외의 재인증 수단 0', nonWalletReauth === 0, `${nonWalletReauth}/${total}`)
 check('전수 검사: 점수 범위 이탈 없음', true)
+// 출력의 '전수' 표기가 실제 열거 건수와 어긋나지 않게 한다 — 표본 방식으로 바뀌면 여기서 걸린다.
+check('전수 검사: 평가 건수 = 2^N × 4', total === subsetCount * 4, `${total} vs ${subsetCount * 4}`)
 
 // ── 2) ★ 관측 신호만으로는 재인증이 발생하지 않는다 ──────────────
 //     M-6/M-7/M-8 은 오탐이 섞이는 것을 전제로 만든 등급이다. 이것들만 모여서
@@ -258,13 +267,8 @@ check('degraded 사유 기록', degradedFallback.reason.includes('수집 실패'
 
 // 폴백 수단으로 빠지는 조합이 전수에서 하나도 없어야 한다.
 let fallbackReauth = 0
-for (let iter = 0; iter < subsetCount; iter++) {
-  const mask = isExhaustive ? iter : Math.floor(Math.random() * TOTAL_POSSIBLE)
-  const signals: RiskSignal[] = []
-  for (let i = 0; i < ALL_SIGNALS.length; i++) {
-    if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
-  }
-  const risk = assessRisk(signals)
+for (let mask = 0; mask < subsetCount; mask++) {
+  const risk = assessRisk(signalsOf(mask))
   for (const degraded of [false, true]) {
     const req = decideAuthRequirement({ isTrustedDevice: true, risk, degraded }).requirement
     if (req !== 'NONE' && req !== 'WALLET') fallbackReauth++
@@ -284,14 +288,9 @@ check('기여도 내림차순 정렬', withEvidence.contributions[0].signal === 
 // 신호가 하나라도 있는 조합 중, 이제 재인증을 요구하게 된 비율을 센다.
 let trustedWithSignals = 0
 let nowChallenged = 0
-for (let iter = 1; iter < subsetCount; iter++) {
-  const mask = isExhaustive ? iter : Math.max(1, Math.floor(Math.random() * TOTAL_POSSIBLE))
-  const signals: RiskSignal[] = []
-  for (let i = 0; i < ALL_SIGNALS.length; i++) {
-    if (mask & (1 << i)) signals.push(ALL_SIGNALS[i])
-  }
+for (let mask = 1; mask < subsetCount; mask++) {
   trustedWithSignals++
-  const risk = assessRisk(signals)
+  const risk = assessRisk(signalsOf(mask))
   if (decideAuthRequirement({ isTrustedDevice: true, risk }).requirement !== 'NONE') nowChallenged++
 }
 const coverage = (nowChallenged / trustedWithSignals) * 100

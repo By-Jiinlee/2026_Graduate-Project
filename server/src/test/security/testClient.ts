@@ -13,7 +13,11 @@ import { registerTrustedDevice, DEVICE_COOKIE_NAME } from '../../services/auth/t
 export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) UpTick-SecurityTest/1.0 Chrome/120'
 
 export const IP = {
-  LOGIN:      '203.0.113.10',
+  // 정상 로그인은 모든 스크립트가 TEST-NET-2(198.51.100.0/24)에서 한다. GeoIP 가 이 대역을
+  // Bucharest, 203.0.113.0/24 를 New York 으로 돌려주기 때문에, 스크립트마다 대역이 다르면
+  // 연달아 실행할 때 IMPOSSIBLE_TRAVEL(65)·ABNORMAL_COUNTRY(40) 가 서서 적응형 인증 강제 모드가
+  // 지갑 서명을 요구한다(서버 정상 동작). 끝자리는 실행마다 바꿔 IP당 로그인 리미터 누적을 피한다.
+  LOGIN:      `198.51.100.${1 + Math.floor(Math.random() * 250)}`,
   NORMAL:     '203.0.113.11',
   TAMPER:     '203.0.113.21',
   EXPIRE:     '203.0.113.22',
