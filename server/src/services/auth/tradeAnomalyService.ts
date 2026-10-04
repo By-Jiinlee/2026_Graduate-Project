@@ -825,9 +825,10 @@ export async function loadDailyTotals(
 }> {
   const table = market === 'real' ? 'real_orders' : 'virtual_orders'
   const excluded = market === 'real' ? `('cancelled','failed')` : `('cancelled')`
-  const now = Date.now()
-  const dayStart = new Date(now - TRADE_POLICY.DAILY.WINDOW_MS)
-  const cutoff = new Date(now - TRADE_POLICY.BASELINE.WINDOW_DAYS * 24 * 60 * 60 * 1000)
+  // 창 경계는 DB 측 계산(NOW() - INTERVAL)이다. raw 쿼리의 Date 파라미터는 Node 로컬 시각으로
+  // 직렬화되어, 서버가 KST 로 돌면 UTC 로 저장된 ordered_at 과 9시간 어긋난다(최근 24시간이 15시간이 됨).
+  const daySec = Math.floor(TRADE_POLICY.DAILY.WINDOW_MS / 1000)
+  const cutoffSec = TRADE_POLICY.BASELINE.WINDOW_DAYS * 24 * 60 * 60
 
   const [daily, recent] = await Promise.all([
     sequelize.query<{ total: string | number; cnt: string | number }>(
@@ -835,18 +836,19 @@ export async function loadDailyTotals(
          FROM ${table}
         WHERE user_id = :userId
           AND status NOT IN ${excluded}
-          AND ordered_at >= :cutoff AND ordered_at < :dayStart
+          AND ordered_at >= (NOW() - INTERVAL :cutoffSec SECOND)
+          AND ordered_at < (NOW() - INTERVAL :daySec SECOND)
         GROUP BY DATE(ordered_at)
         ORDER BY DATE(ordered_at) ASC`,
-      { replacements: { userId, cutoff, dayStart }, type: QueryTypes.SELECT },
+      { replacements: { userId, cutoffSec, daySec }, type: QueryTypes.SELECT },
     ),
     sequelize.query<{ total: string | number | null; cnt: string | number }>(
       `SELECT COALESCE(SUM(total_amount), 0) AS total, COUNT(*) AS cnt
          FROM ${table}
         WHERE user_id = :userId
           AND status NOT IN ${excluded}
-          AND ordered_at >= :dayStart`,
-      { replacements: { userId, dayStart }, type: QueryTypes.SELECT },
+          AND ordered_at >= (NOW() - INTERVAL :daySec SECOND)`,
+      { replacements: { userId, daySec }, type: QueryTypes.SELECT },
     ),
   ])
 
@@ -878,7 +880,8 @@ export async function loadSameIpOrders(
   if (!ip || !stockCode) return []
   const table = market === 'real' ? 'real_orders' : 'virtual_orders'
   const excluded = market === 'real' ? `('cancelled','failed')` : `('cancelled')`
-  const windowStart = new Date(Date.now() - TRADE_POLICY.MULTI_ACCOUNT.WINDOW_MIN * 60_000)
+  // 창 경계는 DB 측 계산 — 10분 창이라 9시간 어긋나면(KST 서버) 창 전체가 미래가 되어 항상 미탐이었다.
+  const windowSec = TRADE_POLICY.MULTI_ACCOUNT.WINDOW_MIN * 60
 
   const rows = await sequelize.query<{ user_id: number; side: 'buy' | 'sell'; total_amount: string | number }>(
     `SELECT o.user_id, o.side, o.total_amount
@@ -886,9 +889,9 @@ export async function loadSameIpOrders(
        JOIN stocks s ON s.id = o.stock_id
       WHERE o.ip_address = :ip
         AND s.code = :stockCode
-        AND o.ordered_at >= :windowStart
+        AND o.ordered_at >= (NOW() - INTERVAL :windowSec SECOND)
         AND o.status NOT IN ${excluded}`,
-    { replacements: { ip, stockCode, windowStart }, type: QueryTypes.SELECT },
+    { replacements: { ip, stockCode, windowSec }, type: QueryTypes.SELECT },
   )
 
   return rows.map((r) => ({
