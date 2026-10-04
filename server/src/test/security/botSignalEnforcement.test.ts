@@ -93,7 +93,9 @@ async function main() {
   check('정상 입력 수용', parseBehaviorData({ mouseMoveCount: 42, avgTypingInterval: 220, timeOnPage: 5000 }) !== null)
 
   // ── 2) 판정 경계 ────────────────────────────────────────────
-  const d = (m: number, t: number, p: number) => detectBotBehavior({ mouseMoveCount: m, avgTypingInterval: t, timeOnPage: p })
+  // k(키 입력 수) 기본값 3 — 기존 경계 케이스의 의미(이동·간격)를 보존한다.
+  const d = (m: number, t: number, p: number, k = 3) =>
+    detectBotBehavior({ mouseMoveCount: m, avgTypingInterval: t, timeOnPage: p, keyPressCount: k })
   check('체류 500ms 정확히 — MOUSE 아님', !d(0, 0, 500).includes('BOT_BEHAVIOR_MOUSE'))
   check('체류 501ms·이동 0 — MOUSE', d(0, 0, 501).includes('BOT_BEHAVIOR_MOUSE'))
   check('이동 1회 — MOUSE 아님', !d(1, 0, 5000).includes('BOT_BEHAVIOR_MOUSE'))
@@ -101,14 +103,20 @@ async function main() {
   check('타자 간격 49.9ms — TYPING', d(5, 49.9, 1000).includes('BOT_BEHAVIOR_TYPING'))
   check('타자 간격 50ms 정확히 — TYPING 아님', !d(5, 50, 1000).includes('BOT_BEHAVIOR_TYPING'))
 
+  // ── 2-b) 오탐 배제 보조 조건 경계(2026-10-01) ────────────────
+  check('이동 0·키 입력 5회 — 키보드 사용자로 MOUSE 배제', !d(0, 0, 1000, 5).includes('BOT_BEHAVIOR_MOUSE'))
+  check('이동 0·키 입력 4회 — MOUSE 유지', d(0, 0, 1000, 4).includes('BOT_BEHAVIOR_MOUSE'))
+  check('타자 빠름·키 입력 2회(자동완성) — TYPING 배제', !d(5, 2, 1000, 2).includes('BOT_BEHAVIOR_TYPING'))
+  check('타자 빠름·키 입력 3회 — TYPING 유지', d(5, 2, 1000, 3).includes('BOT_BEHAVIOR_TYPING'))
+
   // ── 3) ★ 1단계·2단계 판정 일치 ─────────────────────────────────
   // 로그인 시점 맥락 신호(1단계에서 탐지되어 anomaly_logs 에 남는 것들)의 모든 부분집합 × 봇 행동 4종
   const CONTEXT: RiskSignal[] = ['ABNORMAL_TIME', 'CONCURRENT_SESSION', 'ABNORMAL_COUNTRY', 'TRADE_FREQUENCY_SPIKE']
   const BEHAVIORS = [
-    { name: '사람', data: { mouseMoveCount: 42, avgTypingInterval: 220, timeOnPage: 5000 } },
-    { name: '마우스 없음', data: { mouseMoveCount: 0, avgTypingInterval: 190, timeOnPage: 3000 } },
-    { name: '초고속 타자', data: { mouseMoveCount: 3, avgTypingInterval: 5, timeOnPage: 900 } },
-    { name: '둘 다', data: { mouseMoveCount: 0, avgTypingInterval: 2, timeOnPage: 600 } },
+    { name: '사람', data: { mouseMoveCount: 42, avgTypingInterval: 220, timeOnPage: 5000, keyPressCount: 25 } },
+    { name: '마우스 없음', data: { mouseMoveCount: 0, avgTypingInterval: 190, timeOnPage: 3000, keyPressCount: 2 } },
+    { name: '초고속 타자', data: { mouseMoveCount: 3, avgTypingInterval: 5, timeOnPage: 900, keyPressCount: 20 } },
+    { name: '둘 다', data: { mouseMoveCount: 0, avgTypingInterval: 2, timeOnPage: 600, keyPressCount: 4 } },
   ]
 
   async function run(recordBots: boolean) {

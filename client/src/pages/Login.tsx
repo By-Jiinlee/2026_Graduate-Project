@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { setSigningSecret } from '../utils/tradeSigning'
 import { API_BASE } from '../utils/api'
 import { useBehaviorTracker } from '../hooks/useBehaviorTracker'
+import { getDeviceComponentsHash } from '../utils/deviceFingerprint'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -24,13 +25,16 @@ export default function Login() {
     try {
       setError('')
       const deviceFingerprint = localStorage.getItem('device_fingerprint') || 'unknown'
+      // 강화된 디바이스 핑거프린트 — 하드웨어 컴포넌트 조합 해시(캔버스·WebGL·오디오·폰트·타임존)
+      const deviceComponents = await getDeviceComponentsHash()
       const behaviorData = getBehaviorData()// 현재까지 수집된 마우스/키보드 행동 데이터를 가져옴
-      
+
       const res = await fetch(`${API_BASE}/api/auth/login/step1`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'X-Device-Fingerprint': deviceFingerprint
+          'X-Device-Fingerprint': deviceFingerprint,
+          'X-Device-Components': deviceComponents
         },
         credentials: 'include',
         body: JSON.stringify({ email, password, honeypot, behaviorData }), // body에 behaviorData를 추가
@@ -64,11 +68,13 @@ export default function Login() {
     try {
       setError('')
       const deviceFingerprint = localStorage.getItem('device_fingerprint') || 'unknown'
+      const deviceComponents = await getDeviceComponentsHash()
       const res = await fetch(`${API_BASE}/api/auth/login/step2`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'X-Device-Fingerprint': deviceFingerprint // 헤더에 기기 지문 값 추가
+          'X-Device-Fingerprint': deviceFingerprint, // 헤더에 기기 지문 값 추가
+          'X-Device-Components': deviceComponents
         },
         credentials: 'include',
         body: JSON.stringify(payload),

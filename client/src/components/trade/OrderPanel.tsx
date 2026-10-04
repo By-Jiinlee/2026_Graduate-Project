@@ -5,6 +5,7 @@ import { createWalletClient, custom, keccak256, concat, toBytes, getAddress } fr
 import { sepolia } from 'viem/chains'
 import { useTradeModeStore } from '../../store/tradeModeStore'
 import PinPad from './PinPad'
+import { useBehaviorTracker } from '../../hooks/useBehaviorTracker'
 
 import { API_BASE } from '../../utils/api'
 
@@ -23,6 +24,8 @@ const isLoggedIn = () => document.cookie.split(';').some(c => c.trim().startsWit
 export default function OrderPanel({ stockId, stockCode, stockName, currentPrice }: Props) {
   const { mode } = useTradeModeStore()
   const navigate = useNavigate()
+  // 거래 화면 자동화 탐지(S12) — 마우스 없는 즉시 클릭·일정 주문 간격 판정용 행동 수집.
+  const { getBehaviorData } = useBehaviorTracker()
 
   const [side, setSide] = useState<Side>('buy')
   const [orderType, setOrderType] = useState<OrderType>('market')
@@ -105,11 +108,13 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
       // 모의투자 — 기존 로직 유지 (MetaMask 포함)
       const endpoint = side === 'buy' ? '/api/trade/virtual/buy' : '/api/trade/virtual/sell'
       let tradeSignature: string | undefined
+      // 거래 화면 자동화(S12-b) 판정용 행동 데이터 — 서버는 관측 신호로만 쓴다.
+      const behaviorData = getBehaviorData()
 
       try {
         const res = await axios.post(
           `${API_BASE}${endpoint}`,
-          { stockId, stockCode, quantity: Number(quantity), orderType, limitPrice: limitPrice ? Number(limitPrice) : undefined, pin },
+          { stockId, stockCode, quantity: Number(quantity), orderType, limitPrice: limitPrice ? Number(limitPrice) : undefined, pin, behaviorData },
           { withCredentials: true },
         )
         setMessage({ text: res.data.message, ok: true })
@@ -149,7 +154,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
 
       const res = await axios.post(
         `${API_BASE}${endpoint}`,
-        { stockId, stockCode, quantity: Number(quantity), orderType, limitPrice: limitPrice ? Number(limitPrice) : undefined, pin, tradeSignature, signedAmount: amount.toString() },
+        { stockId, stockCode, quantity: Number(quantity), orderType, limitPrice: limitPrice ? Number(limitPrice) : undefined, pin, tradeSignature, signedAmount: amount.toString(), behaviorData },
         { withCredentials: true },
       )
       setMessage({ text: res.data.message, ok: true })

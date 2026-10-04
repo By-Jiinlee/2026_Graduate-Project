@@ -30,6 +30,11 @@ export type AnomalyType =
   | 'CANARY_ACCESS'            // 기만 기술 — 미끼(카나리) 계좌 진입점 접근
   | 'BOT_BEHAVIOR_MOUSE'       // 로그인 폼 체류 중 마우스 이동 0회 (관측 신호)
   | 'BOT_BEHAVIOR_TYPING'      // 로그인 폼 평균 타자 간격 50ms 미만 (관측 신호)
+  | 'SPOOFING_ORDER'           // 지정가 주문 직후 즉시 취소 반복 — 허수주문(관측 신호)
+  | 'WASH_TRADE'               // 단일 계정 동일 종목 양방향 반복 — 자전거래 흔적(관측 신호)
+  | 'BOT_TRADE_BEHAVIOR'       // 거래 화면 자동화 — 일정 주문 간격·마우스 없는 즉시 클릭(관측 신호)
+  | 'BEHAVIOR_BIOMETRIC_MISMATCH' // 행동 생체인식 — 사용자별 프로필 대비 유사도 미달(관측 신호, 토글 시 재인증)
+  | 'DEVICE_FINGERPRINT_MISMATCH' // 신뢰 기기의 하드웨어 핑거프린트(캔버스·WebGL·오디오·폰트·타임존) 변화(관측 신호)
 export type AnomalyAction = 'ALERT' | 'BLOCK' | 'LOCK'
 
 interface AnomalyLogAttributes {
@@ -98,6 +103,11 @@ AnomalyLog.init(
         'CANARY_ACCESS',
         'BOT_BEHAVIOR_MOUSE',
         'BOT_BEHAVIOR_TYPING',
+        'SPOOFING_ORDER',
+        'WASH_TRADE',
+        'BOT_TRADE_BEHAVIOR',
+        'BEHAVIOR_BIOMETRIC_MISMATCH',
+        'DEVICE_FINGERPRINT_MISMATCH',
       ),
       allowNull: false,
     },

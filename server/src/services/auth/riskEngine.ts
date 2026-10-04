@@ -35,6 +35,8 @@ export type RiskSignal =
   | 'CREDENTIAL_STUFFING'
   | 'BOT_BEHAVIOR_MOUSE'
   | 'BOT_BEHAVIOR_TYPING'
+  | 'BEHAVIOR_BIOMETRIC_MISMATCH'  // 사용자별 행동 프로필 대비 유사도 미달 (세션 탈취 의심)
+  | 'DEVICE_FINGERPRINT_MISMATCH'  // 신뢰 기기의 하드웨어 핑거프린트(캔버스·WebGL 등) 변화
   // ── 위협 인텔 ──
   | 'ABUSE_IP'
   | 'HONEYPOT_HISTORY'
@@ -94,6 +96,13 @@ export const RISK_POLICY = {
     // 맥락 정보
     ABNORMAL_TIME: 15,        // 심야 접속 (야근·교대근무일 수 있음)
 
+    // 행동 생체인식 불일치 — 기본은 관측(아래 OBSERVATIONAL 에 조건부 포함)이라 CAP 에 묶이지만,
+    // BIOMETRIC_ENFORCE=true 면 관측에서 빠져 이 가중치(단독으로 WALLET 구간 31~60)가 그대로 선다.
+    BEHAVIOR_BIOMETRIC_MISMATCH: 45,
+
+    // 디바이스 핑거프린트 변화 — 기본 관측(CAP). DEVICE_FP_ENFORCE=true 면 gating 으로 재인증 유발.
+    DEVICE_FINGERPRINT_MISMATCH: 40,
+
     // 관측 신호 — 개별 가중치가 작고, 아래 CAP 으로 합계까지 제한된다
     BOT_BEHAVIOR_MOUSE: 15,
     BOT_BEHAVIOR_TYPING: 15,
@@ -130,7 +139,25 @@ export const RISK_POLICY = {
   ],
 } as const
 
-const OBSERVATIONAL_SET: ReadonlySet<RiskSignal> = new Set(RISK_POLICY.OBSERVATIONAL)
+/**
+ * 행동 생체인식 강제 토글. 기본(관측): 불일치 신호를 관측 집합에 넣어 CAP 에 묶는다 —
+ * 단독으로는 재인증을 유발하지 않고 기록·보조로만 쓴다. true 면 관측에서 제외해
+ * gating 신호가 되어 임계 초과 시 지갑 서명 재인증(WALLET)을 요구한다.
+ */
+export const BIOMETRIC_ENFORCE = process.env.BIOMETRIC_ENFORCE === 'true'
+
+/**
+ * 디바이스 핑거프린트 강제 토글. 기본(관측): 컴포넌트 해시 변화는 CAP 에 묶여 단독으로는
+ * 재인증을 유발하지 않는다(드라이버 업데이트 등 정상 변화의 오탐 방지). true 면 gating 이 되어
+ * 신뢰 기기라도 하드웨어 지문이 바뀌면 지갑 서명 재인증을 요구한다.
+ */
+export const DEVICE_FP_ENFORCE = process.env.DEVICE_FP_ENFORCE === 'true'
+
+const OBSERVATIONAL_SET: ReadonlySet<RiskSignal> = new Set<RiskSignal>([
+  ...RISK_POLICY.OBSERVATIONAL,
+  ...(BIOMETRIC_ENFORCE ? [] : (['BEHAVIOR_BIOMETRIC_MISMATCH'] as RiskSignal[])),
+  ...(DEVICE_FP_ENFORCE ? [] : (['DEVICE_FINGERPRINT_MISMATCH'] as RiskSignal[])),
+])
 
 /** 해당 신호가 관측 등급(합계 상한 적용 대상)인지. */
 export function isObservationalRisk(signal: RiskSignal): boolean {
@@ -289,6 +316,10 @@ const LOGGED_TYPES: readonly RiskSignal[] = [
   'TRADE_FREQUENCY_SPIKE', 'MULTI_ACCOUNT_SAME_IP', 'ROUND_AMOUNT_PATTERN',
   // 봇 신호는 1단계에서만 behaviorData 로 판정할 수 있다. 기록을 거쳐야 2단계(강제 지점)가 같은 신호를 본다.
   'BOT_BEHAVIOR_MOUSE', 'BOT_BEHAVIOR_TYPING',
+  // 행동 생체인식 불일치도 1단계에서만 behaviorData 로 판정된다 — 같은 기록→재독해 경로를 탄다.
+  'BEHAVIOR_BIOMETRIC_MISMATCH',
+  // 디바이스 핑거프린트 변화는 1단계에서 기기 검증 시 판정·기록된다 — 2단계는 기록을 재독해한다.
+  'DEVICE_FINGERPRINT_MISMATCH',
 ]
 
 // ─── 행동 기반 봇 신호 ─────────────────────────────────────────
@@ -297,6 +328,15 @@ export const BOT_POLICY = {
   MOUSE_MIN_TIME_ON_PAGE_MS: 500,
   /** 평균 타자 간격(ms)이 0 초과 이 값 미만이면 TYPING 신호 (0 은 키 입력 없음 — 자동완성 등) */
   TYPING_MAX_INTERVAL_MS: 50,
+  /**
+   * 오탐 배제 보조 조건(2026-10-01).
+   *  · MOUSE: 마우스 이동이 0 이라도 키 입력이 이만큼이면 '키보드 전용/접근성 사용자'로 보고
+   *           MOUSE 신호를 억제한다. 봇은 TYPING 쪽에서 여전히 잡힌다.
+   *  · TYPING: 타자 간격이 빨라도 키 입력 수가 이보다 적으면 자동완성·붙여넣기(단축 입력)로
+   *           보고 TYPING 신호를 억제한다 — 표본이 적어 평균이 신뢰할 수 없기 때문.
+   */
+  MOUSE_EXCLUDE_MIN_KEYPRESS: 5,
+  TYPING_MIN_KEYPRESS: 3,
   /** 비현실적으로 큰 값은 조작·오류로 보고 판정하지 않는다 */
   MAX_COUNT: 1_000_000,
   MAX_MS: 24 * 3_600_000,
@@ -308,6 +348,7 @@ export interface BehaviorMetrics {
   mouseMoveCount: number
   avgTypingInterval: number
   timeOnPage: number
+  keyPressCount: number
 }
 
 /**
@@ -325,14 +366,36 @@ export function parseBehaviorData(raw: unknown): BehaviorMetrics | null {
   const timeOnPage = num(r.timeOnPage, BOT_POLICY.MAX_MS)
   if (mouseMoveCount === null || avgTypingInterval === null || timeOnPage === null) return null
   if (!Number.isInteger(mouseMoveCount)) return null
-  return { mouseMoveCount, avgTypingInterval, timeOnPage }
+  // keyPressCount 는 오탐 배제 보조 신호 — 하위호환을 위해 없으면 0 으로 본다.
+  // 다만 존재하면 유효한 정수여야 한다(조작·로그오염 차단).
+  let keyPressCount = 0
+  if (r.keyPressCount !== undefined) {
+    const kp = num(r.keyPressCount, BOT_POLICY.MAX_COUNT)
+    if (kp === null || !Number.isInteger(kp)) return null
+    keyPressCount = kp
+  }
+  return { mouseMoveCount, avgTypingInterval, timeOnPage, keyPressCount }
 }
 
 /** 검증된 지표로 봇 신호를 판정한다(순수 함수). */
 export function detectBotBehavior(m: BehaviorMetrics): BotSignal[] {
   const out: BotSignal[] = []
-  if (m.timeOnPage > BOT_POLICY.MOUSE_MIN_TIME_ON_PAGE_MS && m.mouseMoveCount === 0) out.push('BOT_BEHAVIOR_MOUSE')
-  if (m.avgTypingInterval > 0 && m.avgTypingInterval < BOT_POLICY.TYPING_MAX_INTERVAL_MS) out.push('BOT_BEHAVIOR_TYPING')
+  // MOUSE: 마우스 이동 0 — 단, 키 입력이 충분하면 키보드 전용 사용자로 보고 배제.
+  if (
+    m.timeOnPage > BOT_POLICY.MOUSE_MIN_TIME_ON_PAGE_MS &&
+    m.mouseMoveCount === 0 &&
+    m.keyPressCount < BOT_POLICY.MOUSE_EXCLUDE_MIN_KEYPRESS
+  ) {
+    out.push('BOT_BEHAVIOR_MOUSE')
+  }
+  // TYPING: 타자 간격이 매우 빠름 — 단, 키 입력 표본이 너무 적으면(자동완성·붙여넣기) 배제.
+  if (
+    m.avgTypingInterval > 0 &&
+    m.avgTypingInterval < BOT_POLICY.TYPING_MAX_INTERVAL_MS &&
+    m.keyPressCount >= BOT_POLICY.TYPING_MIN_KEYPRESS
+  ) {
+    out.push('BOT_BEHAVIOR_TYPING')
+  }
   return out
 }
 

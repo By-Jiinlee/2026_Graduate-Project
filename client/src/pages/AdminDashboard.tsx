@@ -32,6 +32,11 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   CANARY_ACCESS:      { label: '카나리 계좌',     color: '#880e4f' },
   BOT_BEHAVIOR_MOUSE:  { label: '봇 행동-마우스(관측)', color: '#455a64' },
   BOT_BEHAVIOR_TYPING: { label: '봇 행동-타자(관측)',   color: '#37474f' },
+  SPOOFING_ORDER:      { label: '허수주문(관측)',       color: '#b71c6b' },
+  WASH_TRADE:          { label: '자전거래(관측)',       color: '#7b1fa2' },
+  BOT_TRADE_BEHAVIOR:  { label: '거래 자동화(관측)',    color: '#283593' },
+  BEHAVIOR_BIOMETRIC_MISMATCH: { label: '행동 생체인식 불일치(관측)', color: '#4a148c' },
+  DEVICE_FINGERPRINT_MISMATCH: { label: '디바이스 지문 변화(관측)', color: '#311b92' },
 }
 
 const ACTION_META: Record<string, { label: string; color: string }> = {

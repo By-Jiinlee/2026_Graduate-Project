@@ -24,6 +24,17 @@ const rejectByAssessment = (res: Response, a: TradeAssessment): boolean => {
   return false
 }
 
+// 거래 화면 자동화(S12-b) 판정용 행동 데이터. 사용자가 조작할 수 있고 로그 문구에 들어가므로
+// 유한한 숫자만 통과시킨다. 형식이 틀리면 null → 해당 신호는 미평가.
+const parseTradeBehavior = (raw: any): { mouseMoveCount: number; timeOnPage: number } | null => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const m = raw.mouseMoveCount
+  const t = raw.timeOnPage
+  if (typeof m !== 'number' || !Number.isFinite(m) || m < 0 || !Number.isInteger(m)) return null
+  if (typeof t !== 'number' || !Number.isFinite(t) || t < 0) return null
+  return { mouseMoveCount: m, timeOnPage: t }
+}
+
 // ─── PIN 설정 ─────────────────────────────────────────────────
 
 export const openAccount = async (req: Request, res: Response) => {
@@ -72,7 +83,7 @@ export const resetAccount = async (req: Request, res: Response) => {
 export const buyStock = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const { stockId, stockCode, quantity, orderType, limitPrice, pin, tradeSignature, signedAmount } = req.body
+    const { stockId, stockCode, quantity, orderType, limitPrice, pin, tradeSignature, signedAmount, behaviorData } = req.body
 
     if (!stockId || !stockCode || !quantity || !orderType || !pin) {
       return res.status(400).json({ message: '필수 파라미터가 누락되었습니다' })
@@ -100,6 +111,7 @@ export const buyStock = async (req: Request, res: Response) => {
       userId, ip, userAgent, market: 'virtual', side: 'buy', stockCode,
       quantity: Number(quantity), price, portfolioValue,
       hasSignature: Boolean(tradeSignature),
+      behavior: parseTradeBehavior(behaviorData),
     })
     if (rejectByAssessment(res, assessment)) return
     if (assessment.verdict === 'STEP_UP' && !tradeSignature) {
@@ -138,7 +150,7 @@ export const buyStock = async (req: Request, res: Response) => {
 export const sellStock = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
-    const { stockId, stockCode, quantity, orderType, limitPrice, pin, tradeSignature, signedAmount } = req.body
+    const { stockId, stockCode, quantity, orderType, limitPrice, pin, tradeSignature, signedAmount, behaviorData } = req.body
 
     if (!stockId || !stockCode || !quantity || !orderType || !pin) {
       return res.status(400).json({ message: '필수 파라미터가 누락되었습니다' })
@@ -166,6 +178,7 @@ export const sellStock = async (req: Request, res: Response) => {
       userId, ip, userAgent, market: 'virtual', side: 'sell', stockCode,
       quantity: Number(quantity), price, portfolioValue,
       hasSignature: Boolean(tradeSignature),
+      behavior: parseTradeBehavior(behaviorData),
     })
     if (rejectByAssessment(res, assessment)) return
     if (assessment.verdict === 'STEP_UP' && !tradeSignature) {
