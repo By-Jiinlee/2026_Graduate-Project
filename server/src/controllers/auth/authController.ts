@@ -1,5 +1,4 @@
 import { Request, Response, NextFunction } from 'express'
-import jwt from 'jsonwebtoken'
 import * as authService from '../../services/auth/authService'
 import {
   verifyTrustedDevice,
@@ -392,7 +391,7 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 1000 * 60 * 10, // 10분
+      maxAge: authService.ACCESS_TOKEN_TTL_SEC * 1000,
     })
 
     res.cookie('refreshToken', refreshToken, {
@@ -406,7 +405,7 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 1000 * 60 * 10, // 10분
+      maxAge: authService.ACCESS_TOKEN_TTL_SEC * 1000,
     })
 
     // 기기 기억하기
@@ -514,24 +513,20 @@ export const refreshToken = async (req: Request, res: Response) => {
 
     const decoded = authService.verifyRefreshToken(token) as any
 
-    const accessToken = jwt.sign(
-      { id: decoded.id },
-      process.env.JWT_SECRET as string,
-      { expiresIn: '1h' },
-    )
+    const accessToken = authService.signAccessToken({ id: decoded.id })
 
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 1000 * 60 * 10,
+      maxAge: authService.ACCESS_TOKEN_TTL_SEC * 1000,
     })
 
     res.cookie('isLoggedIn', 'true', {
       httpOnly: false,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
-      maxAge: 1000 * 60 * 10,
+      maxAge: authService.ACCESS_TOKEN_TTL_SEC * 1000,
     })
 
     return res.status(200).json({ message: '토큰이 갱신되었습니다' })

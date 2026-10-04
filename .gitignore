@@ -42,3 +42,6 @@ server/data/*.json
 
 # 작업 산출 문서 (저장소 공유 대상 아님)
 UpTick_*.txt
+
+# TypeScript 증분 빌드 캐시
+*.tsbuildinfo

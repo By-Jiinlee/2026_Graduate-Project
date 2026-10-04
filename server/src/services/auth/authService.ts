@@ -449,11 +449,7 @@ export const loginStep2 = async (
 
 
   // JWT 발급
-  const accessToken = jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
-    process.env.JWT_SECRET as string,
-    { expiresIn: '10m' },
-  )
+  const accessToken = signAccessToken({ id: user.id, email: user.email, role: user.role })
 
   const refreshToken = jwt.sign(
     { id: user.id },
@@ -538,6 +534,13 @@ export const withdraw = async (userId: number) => {
 export const verifyAccessToken = (token: string) => {
   return jwt.verify(token, process.env.JWT_SECRET as string)
 }
+
+// 액세스 토큰 수명의 단일 출처. 로그인과 토큰 갱신이 각자 수명을 적으면 한쪽만 늘어난다 —
+// 갱신 경로가 1시간짜리를 발급해 쿠키(10분)보다 토큰이 오래 살아남던 것이 그 사례다.
+export const ACCESS_TOKEN_TTL_SEC = 10 * 60
+
+export const signAccessToken = (payload: { id: number; email?: string | null; role?: string }) =>
+  jwt.sign(payload, process.env.JWT_SECRET as string, { expiresIn: ACCESS_TOKEN_TTL_SEC })
 
 export const verifyRefreshToken = (token: string) => {
   return jwt.verify(token, process.env.JWT_REFRESH_SECRET as string)

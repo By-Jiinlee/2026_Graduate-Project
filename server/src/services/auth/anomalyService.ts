@@ -31,7 +31,7 @@ const CONFIG = {
   },
   CONCURRENT_SESSION: {
     WINDOW_MINUTES: 30,          // 동시 세션 감지 윈도우
-    MAX_IPS: 3,                  // 허용 동시 IP 수
+    ALERT_AT_IPS: 3,             // 현재 접속 포함 서로 다른 IP 가 이 수 이상이면 경보
   },
   GEO: {
     HISTORY_DAYS: 90,            // 비교 기준 과거 접속 기록 기간
@@ -233,28 +233,48 @@ async function detectAbnormalTime(ctx: LoginContext) {
 // ─────────────────────────────────────────────
 // 3. 동시 다중 세션 탐지 (LoginRecord 활용)
 // ─────────────────────────────────────────────
+// IPv4-mapped IPv6(::ffff:1.2.3.4)는 같은 주소다. 1단계(x-forwarded-for)와 로그인 기록(socket)이
+// 서로 다른 표기를 쓰면 한 기기가 IP 두 개로 세어진다.
+const normalizeIp = (ip: string): string => ip.trim().toLowerCase().replace(/^::ffff:(?=\d+\.\d+\.\d+\.\d+$)/, '')
+
+/**
+ * 동시 다중 세션 판정(순수 함수). 최근 창의 로그인 IP 와 현재 IP 를 합쳐 서로 다른 IP 수를 센다.
+ *
+ * 이전 판정은 "현재 IP 가 최근 기록에 없으면" 경보였다. 로그인 기록은 2단계 성공 뒤에야 쌓이므로
+ * 30분 만의 첫 로그인은 최근 기록이 비어 있어 매번 '새 IP' 로 경보가 났다(운영 로그 166건 중 145건이
+ * 기존 활성 IP 0개). 다른 세션이 하나도 없는데 "동시 세션"이라 부를 수는 없으므로 IP 수로만 판정한다.
+ */
+export function judgeConcurrentSession(
+  recentIps: readonly string[],
+  currentIp: string,
+  alertAt: number = CONFIG.CONCURRENT_SESSION.ALERT_AT_IPS,
+): { detected: boolean; distinctIps: string[] } {
+  const distinct = new Set<string>()
+  for (const ip of [...recentIps, currentIp]) {
+    if (typeof ip !== 'string') continue
+    const n = normalizeIp(ip)
+    if (n && n !== 'unknown') distinct.add(n)
+  }
+  const distinctIps = [...distinct]
+  return { detected: distinctIps.length >= alertAt, distinctIps }
+}
+
 async function detectConcurrentSession(userId: number, currentIp: string, email: string, userAgent?: string) {
   const windowStart = new Date(Date.now() - CONFIG.CONCURRENT_SESSION.WINDOW_MINUTES * 60 * 1000)
 
   const records = await LoginRecord.findAll({
-    where: literal(
-      `user_id = ${userId} AND logged_at >= '${windowStart.toISOString().slice(0, 19).replace('T', ' ')}'`
-    ),
+    where: { user_id: userId, logged_at: { [Op.gte]: windowStart } },
     attributes: ['ip_address'],
     group: ['ip_address'],
   })
 
-  const activeIps = records.map((r: any) => r.ip_address as string)
-  const isNewIp = !activeIps.includes(currentIp)
+  const verdict = judgeConcurrentSession(records.map((r) => r.ip_address), currentIp)
+  if (!verdict.detected) return null
 
-  if (activeIps.length < CONFIG.CONCURRENT_SESSION.MAX_IPS && !isNewIp) return null
-
-  const detail = isNewIp
-    ? `새로운 IP(${currentIp})에서 동시 세션 감지. 기존 활성 IP: [${activeIps.join(', ')}]`
-    : `동시 세션 ${activeIps.length}개 감지 (허용: ${CONFIG.CONCURRENT_SESSION.MAX_IPS}개)`
-  const userMessage = isNewIp
-    ? '다른 위치의 기기에서 동시 접속이 감지되었습니다. 본인이 아니라면 즉시 비밀번호를 변경해주세요.'
-    : '여러 기기에서 동시에 로그인이 감지되었습니다.'
+  const detail =
+    `30분 내 서로 다른 IP ${verdict.distinctIps.length}개에서 동시 세션 감지 ` +
+    `(임계 ${CONFIG.CONCURRENT_SESSION.ALERT_AT_IPS}개, 현재 ${normalizeIp(currentIp)})`
+  const userMessage = '여러 위치의 기기에서 동시에 로그인이 감지되었습니다. 본인이 아니라면 즉시 비밀번호를 변경해주세요.'
 
   await logAnomaly({
     userId,

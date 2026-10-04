@@ -19,11 +19,11 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex')
 }
 
-function buildFingerprint(userAgent: string, ip: string): string {
-  // [개발] IP 제외 (로컬 환경에서 ::1/127.0.0.1 혼용으로 불일치 발생)
+// IP 는 의도적으로 넣지 않는다. 이동통신망·공유기 NAT 에서는 세션 중에도 IP 가 바뀌어, 넣으면
+// 정당한 기기가 반복적으로 신뢰 해제(파기)되고 매번 지갑 서명을 요구받는다. IP 변화의 위험은
+// 지문이 아니라 불가능한 이동·비정상 국가 탐지와 위험 점수가 맡는다(논문 6.2).
+function buildFingerprint(userAgent: string): string {
   return crypto.createHash('sha256').update(userAgent).digest('hex')
-  // [배포시 교체] IP 포함 핑거프린트
-  // return crypto.createHash('sha256').update(`${userAgent}||${ip}`).digest('hex')
 }
 
 // 클라이언트가 보낸 하드웨어 컴포넌트 조합 해시(캔버스·WebGL·오디오·폰트·타임존)를
@@ -87,7 +87,7 @@ export async function verifyTrustedDevice(
   if (!rawToken) return { trusted: false, componentMismatch: false }
 
   const hashedToken = hashToken(rawToken)
-  const fingerprint = buildFingerprint(userAgent, ip)
+  const fingerprint = buildFingerprint(userAgent)
 
   const device = await TrustedDevice.findOne({
     where: {
@@ -131,7 +131,7 @@ export async function registerTrustedDevice(
   const deviceType = detectDeviceType(userAgent)
   const rawToken = crypto.randomBytes(32).toString('hex')
   const hashedToken = hashToken(rawToken)
-  const fingerprint = buildFingerprint(userAgent, ip)
+  const fingerprint = buildFingerprint(userAgent)
   const componentFingerprint = buildComponentFingerprint(componentsHash)
   const expiresAt = new Date(Date.now() + TRUSTED_DAYS * 24 * 60 * 60 * 1000)
   const label = buildLabel(userAgent)
