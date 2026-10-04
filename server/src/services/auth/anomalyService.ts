@@ -630,6 +630,66 @@ export async function recordBotBehavior(params: {
 }
 
 // ─────────────────────────────────────────────
+// 행동 생체인식 불일치 기록
+//
+// 로그인 1단계에서만 behaviorData 로 판정할 수 있으므로, 봇 신호와 같은 "기록 → 2단계 재독해"
+// 경로를 타야 한다(반드시 await). 기본은 관측(ALERT)이며, BIOMETRIC_ENFORCE 토글 시 위험 점수에서
+// gating 으로 다뤄져 재인증을 유발한다(기록의 action 은 그대로 ALERT — 무슨 일이 있었는지만 남긴다).
+// ─────────────────────────────────────────────
+export async function recordBiometricMismatch(params: {
+  userId: number
+  email: string
+  ip: string
+  userAgent?: string
+  detail: string
+}): Promise<void> {
+  try {
+    await logAnomaly({
+      userId: params.userId,
+      email: params.email,
+      ip: params.ip,
+      userAgent: params.userAgent,
+      type: 'BEHAVIOR_BIOMETRIC_MISMATCH',
+      action: 'ALERT',
+      detail: `[행동 생체인식 · 관측] ${params.detail}`,
+    })
+  } catch (err) {
+    console.error('[Anomaly] 행동 생체인식 불일치 기록 오류:', err)
+  }
+}
+
+// ─────────────────────────────────────────────
+// 디바이스 핑거프린트 변화 기록
+//
+// 신뢰 기기의 하드웨어 컴포넌트 지문(캔버스·WebGL·오디오·폰트·타임존)이 저장값과 달라졌을 때
+// 로그인 1단계(기기 검증 시점)에서 기록한다. 2단계는 이 기록을 재독해해 같은 신호를 본다.
+// 기본은 관측(ALERT). DEVICE_FP_ENFORCE 토글 시 위험 점수에서 gating 으로 다뤄진다.
+// 신뢰 자체는 파기하지 않는다(정상적 하드웨어·드라이버 변화의 오탐 방지).
+// ─────────────────────────────────────────────
+export async function recordDeviceFingerprintMismatch(params: {
+  userId: number
+  email: string
+  ip: string
+  userAgent?: string
+}): Promise<void> {
+  try {
+    await logAnomaly({
+      userId: params.userId,
+      email: params.email,
+      ip: params.ip,
+      userAgent: params.userAgent,
+      type: 'DEVICE_FINGERPRINT_MISMATCH',
+      action: 'ALERT',
+      detail:
+        '[디바이스 핑거프린트 · 관측] 신뢰 기기의 하드웨어 지문(캔버스·WebGL·오디오·폰트·타임존)이 ' +
+        '이전 등록값과 달라졌습니다 — 기기 변조·토큰 탈취 가능성(신뢰는 유지, 위험 점수에만 반영)',
+    })
+  } catch (err) {
+    console.error('[Anomaly] 디바이스 핑거프린트 변화 기록 오류:', err)
+  }
+}
+
+// ─────────────────────────────────────────────
 // 요청 서명(HMAC) 검증 실패 탐지
 //
 // hmacMiddleware 에서 호출한다. 응답 지연을 막기 위해 호출부는 await 하지 않고
@@ -867,16 +927,26 @@ export async function recordTradeAnomaly(params: {
     // 관측 신호 목록. 원본은 tradeAnomalyService.OBSERVATIONAL_SIGNALS 이지만
     // 그쪽이 이 파일을 import 하고 있어(순환) 여기서는 값을 복제한다.
     // 신호를 추가할 때 두 곳을 함께 고칠 것.
-    const OBSERVATIONAL = ['TRADE_FREQUENCY_SPIKE', 'ROUND_AMOUNT_PATTERN', 'MULTI_ACCOUNT_SAME_IP']
+    const OBSERVATIONAL = [
+      'TRADE_FREQUENCY_SPIKE', 'ROUND_AMOUNT_PATTERN', 'MULTI_ACCOUNT_SAME_IP',
+      'SPOOFING_ORDER', 'WASH_TRADE', 'BOT_TRADE_BEHAVIOR',
+    ]
     const gating = signals.filter((sig) => !OBSERVATIONAL.includes(sig))
 
+    // 맥락 신호(M-2/M-3) > 금액 이상 > 관측 신호(시장조작·빈도·패턴) 순.
+    // 시장 조작 계열(S10~S12)은 관측 신호이므로 금액 이상 뒤에 두되, 각자 고유 유형으로
+    // 기록해 대시보드에서 따로 집계되게 한다. (gating 은 위 지역 OBSERVATIONAL 기준이라
+    // enforce 토글과 무관하게 계산된다.)
     const type: AnomalyType =
       signals.includes('POST_CREDENTIAL_CHANGE') ? 'POST_CHANGE_TRADE'
         : signals.includes('DORMANT_ACTIVITY') ? 'DORMANT_ACCOUNT_ACTIVITY'
           : gating.length > 0 ? 'ABNORMAL_TRADE_AMOUNT'
-            : signals.includes('MULTI_ACCOUNT_SAME_IP') ? 'MULTI_ACCOUNT_SAME_IP'
-              : signals.includes('TRADE_FREQUENCY_SPIKE') ? 'TRADE_FREQUENCY_SPIKE'
-                : 'ROUND_AMOUNT_PATTERN'
+            : signals.includes('SPOOFING_ORDER') ? 'SPOOFING_ORDER'
+              : signals.includes('WASH_TRADE') ? 'WASH_TRADE'
+                : signals.includes('BOT_TRADE_BEHAVIOR') ? 'BOT_TRADE_BEHAVIOR'
+                  : signals.includes('MULTI_ACCOUNT_SAME_IP') ? 'MULTI_ACCOUNT_SAME_IP'
+                    : signals.includes('TRADE_FREQUENCY_SPIKE') ? 'TRADE_FREQUENCY_SPIKE'
+                      : 'ROUND_AMOUNT_PATTERN'
 
     await logAnomaly({
       userId: params.userId,

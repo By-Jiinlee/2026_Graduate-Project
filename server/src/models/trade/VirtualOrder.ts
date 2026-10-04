@@ -18,6 +18,7 @@ interface VirtualOrderAttributes {
   user_agent?: string
   ordered_at: Date
   filled_at?: Date
+  cancelled_at?: Date
   created_at?: Date
 }
 
@@ -43,6 +44,7 @@ class VirtualOrder
   public user_agent?: string
   public ordered_at!: Date
   public filled_at?: Date
+  public cancelled_at?: Date
   public created_at?: Date
 }
 
@@ -112,6 +114,10 @@ VirtualOrder.init(
       defaultValue: DataTypes.NOW,
     },
     filled_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    cancelled_at: {
       type: DataTypes.DATE,
       allowNull: true,
     },

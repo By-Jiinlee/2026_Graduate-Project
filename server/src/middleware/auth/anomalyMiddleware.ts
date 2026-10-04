@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
-import { analyzeLoginAttempt, isAccountLocked, recordBotBehavior } from '../../services/auth/anomalyService'
+import { analyzeLoginAttempt, isAccountLocked, recordBotBehavior, recordBiometricMismatch } from '../../services/auth/anomalyService'
+import { processLoginBehavior } from '../../services/auth/behaviorProfileService'
 import { checkIPAbuse } from '../../services/auth/abuseIPDBService'
 import { blockIP } from '../security/ipBlockMiddleware'
 import AnomalyLog from '../../models/auth/AnomalyLog'
@@ -189,6 +190,31 @@ export async function analyzeAfterLogin(
             metrics: behavior,
           })
         }
+
+        // ── 행동 생체인식 — 사용자별 프로필 대비 유사도 판정 ──────────
+        //
+        // 봇 신호(세션 단위 즉시판단)를 넘어, 로그인마다 누적한 "이 사람의 리듬"과 비교한다.
+        // 불일치면 신호를 기록(2단계 재독해 경로)하고 이번 판정에도 반영한다. 봇 신호와 같은
+        // 이유로 반드시 await — 기록이 없으면 2단계(강제 지점)가 이 신호를 못 본다.
+        if (behavior) {
+          try {
+            const bio = await processLoginBehavior(loginUserId, behavior)
+            if (bio.outcome === 'mismatch') {
+              await recordBiometricMismatch({
+                userId: loginUserId,
+                email: loginEmail ?? '',
+                ip,
+                userAgent: req.headers['user-agent'],
+                detail: bio.detail,
+              })
+              collected.signals.push('BEHAVIOR_BIOMETRIC_MISMATCH')
+            }
+          } catch (bioErr) {
+            // 생체인식 실패가 로그인을 막지 않는다(fail-open).
+            console.error('[Biometric] 로그인 행동 판정 실패:', bioErr)
+          }
+        }
+
         const risk = assessRisk(collected.signals)
         const decision = decideAuthRequirement({
           isTrustedDevice: res.locals.isTrustedDevice === true,

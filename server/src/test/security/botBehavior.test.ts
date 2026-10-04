@@ -18,7 +18,7 @@ import { collectRiskSignals } from '../../services/auth/riskEngine'
 
 interface Scenario {
   name: string
-  behaviorData?: { mouseMoveCount: number; avgTypingInterval: number; timeOnPage: number }
+  behaviorData?: { mouseMoveCount: number; avgTypingInterval: number; timeOnPage: number; keyPressCount?: number }
 }
 
 // 테스트 오염 방지 — 기존 허니팟/카나리 이력이 없는 전용 IP 대역 사용
@@ -36,19 +36,19 @@ const ATTACK_SCENARIOS: Scenario[] = [
   },
   {
     name: 'Playwright fill() — DOM 값 직접 대입, 키 이벤트 없음',
-    behaviorData: { mouseMoveCount: 0, avgTypingInterval: 0, timeOnPage: 800 },
+    behaviorData: { mouseMoveCount: 0, avgTypingInterval: 0, timeOnPage: 800, keyPressCount: 0 },
   },
   {
     name: 'Playwright type(delay:0) — 키 이벤트는 발생하나 초고속',
-    behaviorData: { mouseMoveCount: 0, avgTypingInterval: 2, timeOnPage: 600 },
+    behaviorData: { mouseMoveCount: 0, avgTypingInterval: 2, timeOnPage: 600, keyPressCount: 20 },
   },
   {
     name: 'Selenium send_keys — 마우스 소량 이동 + 초고속 타자',
-    behaviorData: { mouseMoveCount: 3, avgTypingInterval: 5, timeOnPage: 900 },
+    behaviorData: { mouseMoveCount: 3, avgTypingInterval: 5, timeOnPage: 900, keyPressCount: 20 },
   },
   {
     name: '사람처럼 딜레이를 넣은 회피형 봇',
-    behaviorData: { mouseMoveCount: 15, avgTypingInterval: 180, timeOnPage: 4000 },
+    behaviorData: { mouseMoveCount: 15, avgTypingInterval: 180, timeOnPage: 4000, keyPressCount: 25 },
   },
 ]
 
@@ -56,23 +56,25 @@ const ATTACK_SCENARIOS: Scenario[] = [
 const NORMAL_SCENARIOS: Scenario[] = [
   {
     name: '일반 데스크톱 사용자 (마우스+키보드 정상 사용)',
-    behaviorData: { mouseMoveCount: 42, avgTypingInterval: 220, timeOnPage: 5000 },
+    behaviorData: { mouseMoveCount: 42, avgTypingInterval: 220, timeOnPage: 5000, keyPressCount: 25 },
   },
   {
+    // 배제 보조 조건 검증 — 마우스 0 이지만 키 입력이 충분해 키보드 사용자로 보고 MOUSE 억제.
     name: '키보드 전용/접근성 사용자 (Tab 이동, 마우스 미사용)',
-    behaviorData: { mouseMoveCount: 0, avgTypingInterval: 190, timeOnPage: 3000 },
+    behaviorData: { mouseMoveCount: 0, avgTypingInterval: 190, timeOnPage: 3000, keyPressCount: 30 },
   },
   {
     name: '비밀번호 관리자 자동완성 사용자',
-    behaviorData: { mouseMoveCount: 5, avgTypingInterval: 0, timeOnPage: 1200 },
+    behaviorData: { mouseMoveCount: 5, avgTypingInterval: 0, timeOnPage: 1200, keyPressCount: 0 },
   },
   {
     name: '빠른 타이피스트',
-    behaviorData: { mouseMoveCount: 8, avgTypingInterval: 60, timeOnPage: 2500 },
+    behaviorData: { mouseMoveCount: 8, avgTypingInterval: 60, timeOnPage: 2500, keyPressCount: 30 },
   },
   {
+    // 배제 보조 조건 검증 — 타자 간격은 빠르지만 키 입력 표본이 적어(자동완성) TYPING 억제.
     name: '단축 입력 사용자 (이메일 자동완성 후 비밀번호만 빠르게 입력)',
-    behaviorData: { mouseMoveCount: 2, avgTypingInterval: 45, timeOnPage: 1800 },
+    behaviorData: { mouseMoveCount: 2, avgTypingInterval: 45, timeOnPage: 1800, keyPressCount: 2 },
   },
 ]
 

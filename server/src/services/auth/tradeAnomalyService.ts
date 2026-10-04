@@ -142,7 +142,40 @@ export const TRADE_POLICY = {
     Z: 2.0,                            // 완화된 단건 z 임계 (평상시 3.5)
     RATIO: 0.05,                       // 완화된 평가액 비율 임계 (평상시 20%)
   },
+  // ── 시장 조작 / 거래 자동화 (2026-10-01 신규, 모두 관측 신호) ──
+  //
+  // S10 허수주문(스푸핑) — 지정가 주문 직후 즉시 취소의 반복.
+  //   체결 의사 없이 호가를 띄웠다 거두는 행위다. "단명 지정가"(생성→취소 지연이 아주 짧음)의
+  //   반복 또는 비정상적으로 높은 취소율로 본다. 모의투자만 취소 경로가 계측된다.
+  SPOOFING: {
+    WINDOW_MS: 60 * 60 * 1000,   // 최근 1시간
+    SHORT_LIVED_MS: 5000,        // 생성→취소 5초 미만이면 '단명 지정가'
+    MIN_SHORT_LIVED: 3,          // 창 안 단명 취소가 이만큼이면 신호(주 조건)
+    CANCEL_RATIO: 0.6,           // 보조: 취소율이 이 이상이고
+    MIN_ORDERS: 5,               //       창 안 전체 주문이 이만큼일 때
+  },
+  // S11 자전거래 흔적 — 단일 계정이 짧은 창에서 같은 종목을 매수·매도 양방향 반복.
+  //   오더북이 없어 A↔B 체결은 불가하므로 '흔적'을 본다. 동일 IP 다계정 맞물림은 S9가 담당.
+  SELF_CHURN: {
+    WINDOW_MS: 10 * 60 * 1000,   // 최근 10분
+    MIN_EACH_SIDE: 2,            // 같은 종목에서 매수·매도가 각각 이만큼
+  },
+  // S12-a 일정한 주문 간격 — 사람은 간격이 들쭉날쭉, 봇은 일정하다. 간격 변동계수로 본다.
+  ORDER_INTERVAL: {
+    WINDOW_MS: 60 * 60 * 1000,
+    MIN_SAMPLES: 5,              // 간격 표본(주문 수 - 1)이 이만큼은 돼야 판정
+    CV_MAX: 0.05,               // 간격 변동계수가 이 이하면 '일정 간격'(자동화)
+  },
+  // S12-b 마우스 없는 즉시 클릭 — 거래 화면 체류 중 마우스 이동 0회(클라이언트 신호).
+  //   로그인 봇 신호(BOT_BEHAVIOR_MOUSE)와 같은 임계를 거래 화면에 적용한다.
+  BEHAVIOR: {
+    MIN_TIME_ON_PAGE_MS: 500,    // 체류가 이보다 길면서 마우스 이동이 0이면 자동화 의심
+  },
 } as const
+
+// 관측 신호의 판정 승격 토글 — 기본 관측(미강제). true 면 gating 으로 다룬다.
+// (환경변수는 서비스 진입점에서 읽어 조립 단계에 전달한다.)
+export const MARKET_MANIP_ENFORCE = process.env.MARKET_MANIP_ENFORCE === 'true'
 
 export type SanityReason =
   | 'QUANTITY_NOT_FINITE'
@@ -166,8 +199,18 @@ export type TradeSignal =
   | 'TRADE_FREQUENCY_SPIKE'    // M-6 평소 대비 거래 건수 급증 (관측 신호)
   | 'ROUND_AMOUNT_PATTERN'     // M-8 반올림 금액 반복 — 자동화 흔적 (관측 신호)
   | 'MULTI_ACCOUNT_SAME_IP'    // M-7 동일 IP 다계정 동일 종목 거래 (관측 신호)
+  | 'SPOOFING_ORDER'           // S10 지정가 직후 즉시 취소 반복 — 허수주문 (관측 신호)
+  | 'WASH_TRADE'               // S11 단일 계정 동일 종목 양방향 반복 — 자전거래 흔적 (관측 신호)
+  | 'BOT_TRADE_BEHAVIOR'       // S12 거래 화면 자동화 — 일정 간격·마우스 없는 즉시 클릭 (관측 신호)
 
 export type TradeVerdict = 'ALLOW' | 'STEP_UP' | 'BLOCK'
+
+/** 시장 조작·거래 자동화 계열 신호 — enforce 토글 시 관측→gating 으로 승격 대상. */
+const MANIP_SIGNALS: ReadonlySet<TradeSignal> = new Set<TradeSignal>([
+  'SPOOFING_ORDER',
+  'WASH_TRADE',
+  'BOT_TRADE_BEHAVIOR',
+])
 
 /**
  * 관측 신호 — 기록만 하고 판정(verdict)은 바꾸지 않는 신호.
@@ -186,6 +229,10 @@ const OBSERVATIONAL_SIGNALS: ReadonlySet<TradeSignal> = new Set<TradeSignal>([
   'TRADE_FREQUENCY_SPIKE',
   'ROUND_AMOUNT_PATTERN',
   'MULTI_ACCOUNT_SAME_IP',
+  // 시장 조작·거래 자동화 — 기본 관측. enforceManip 토글 시 조립 단계에서 gating 으로 다룬다.
+  'SPOOFING_ORDER',
+  'WASH_TRADE',
+  'BOT_TRADE_BEHAVIOR',
 ])
 
 /** 해당 신호가 관측 전용(판정 불변)인지 — 대시보드·검증 스크립트가 함께 참조한다. */
@@ -238,6 +285,16 @@ export interface TradeInput {
   // 위험 맥락 — 값이 없으면(null/undefined) 해당 규칙은 평가하지 않는다.
   minutesSinceCredentialChange?: number | null  // M-2: 비밀번호·이메일 최종 변경 후 경과 분
   daysSinceLastActivity?: number | null         // M-3: 마지막 거래 이후 경과 일
+  // S10 허수주문 — loadCancelPattern 결과. 없으면 미평가.
+  cancelStats?: { shortLivedCancels: number; totalCancels: number; totalOrders: number } | null
+  // S11 자전거래 흔적 — loadSelfChurn 결과(같은 종목 방향별 건수). 없으면 미평가.
+  selfChurn?: { buyCount: number; sellCount: number } | null
+  // S12-a 거래 자동화 — 최근 주문들의 연속 간격(ms, 시간 오름차순). 없으면 미평가.
+  orderIntervals?: readonly number[]
+  // S12-b 거래 자동화 — 현재 세션의 거래 화면 행동(마우스 없는 즉시 클릭). 없으면 미평가.
+  behavior?: { mouseMoveCount: number; timeOnPage: number } | null
+  // 시장 조작 계열(S10~S12) 신호를 관측이 아닌 판정(gating)으로 승격할지. 기본 관측.
+  enforceManip?: boolean
 }
 
 const won = (v: number): string => `${Math.round(v).toLocaleString('ko-KR')}원`
@@ -552,11 +609,78 @@ export function assessTrade(input: TradeInput): TradeAssessment {
     userReasons.push(`${Math.round(dormantDays)}일 만의 거래이면서 평소보다 큰 금액입니다.`)
   }
 
+  // ── S10. 허수주문(스푸핑) — 지정가 직후 즉시 취소 반복 ──────────
+  //   단명 지정가 취소의 반복(주 조건) 또는 비정상 취소율(보조 조건).
+  if (input.cancelStats != null) {
+    const { shortLivedCancels, totalCancels, totalOrders } = input.cancelStats
+    const shortHit = shortLivedCancels >= TRADE_POLICY.SPOOFING.MIN_SHORT_LIVED
+    const ratioHit =
+      totalOrders >= TRADE_POLICY.SPOOFING.MIN_ORDERS &&
+      totalCancels / totalOrders >= TRADE_POLICY.SPOOFING.CANCEL_RATIO
+    if (shortHit || ratioHit) {
+      signals.push('SPOOFING_ORDER')
+      const parts: string[] = []
+      if (shortHit)
+        parts.push(
+          `단명 지정가 취소 ${shortLivedCancels}건(${TRADE_POLICY.SPOOFING.SHORT_LIVED_MS}ms 미만, ` +
+          `임계 ${TRADE_POLICY.SPOOFING.MIN_SHORT_LIVED})`,
+        )
+      if (ratioHit)
+        parts.push(
+          `취소율 ${pct(totalCancels / totalOrders)}(${totalCancels}/${totalOrders}, ` +
+          `임계 ${pct(TRADE_POLICY.SPOOFING.CANCEL_RATIO)})`,
+        )
+      reasons.push(`허수주문 의심 — ${parts.join(', ')}`)
+      // 관측 신호 — userReasons 미추가.
+    }
+  }
+
+  // ── S11. 자전거래 흔적 — 단일 계정 동일 종목 양방향 반복 ────────
+  if (input.selfChurn != null) {
+    const { buyCount, sellCount } = input.selfChurn
+    if (
+      buyCount >= TRADE_POLICY.SELF_CHURN.MIN_EACH_SIDE &&
+      sellCount >= TRADE_POLICY.SELF_CHURN.MIN_EACH_SIDE
+    ) {
+      signals.push('WASH_TRADE')
+      reasons.push(
+        `자전거래 흔적 — ${TRADE_POLICY.SELF_CHURN.WINDOW_MS / 60000}분 내 동일 종목 ` +
+        `매수 ${buyCount}·매도 ${sellCount}건 반복(각 임계 ${TRADE_POLICY.SELF_CHURN.MIN_EACH_SIDE})`,
+      )
+    }
+  }
+
+  // ── S12. 거래 화면 자동화 — 일정 주문 간격(서버) 또는 마우스 없는 즉시 클릭(클라) ──
+  let intervalCv: number | null = null
+  if (input.orderIntervals != null && input.orderIntervals.length >= TRADE_POLICY.ORDER_INTERVAL.MIN_SAMPLES) {
+    const iv = input.orderIntervals
+    const mean = iv.reduce((a, b) => a + b, 0) / iv.length
+    const sd = Math.sqrt(iv.reduce((acc, v) => acc + (v - mean) ** 2, 0) / iv.length)
+    intervalCv = mean > 0 ? sd / mean : 0
+  }
+  const regularInterval = intervalCv != null && intervalCv <= TRADE_POLICY.ORDER_INTERVAL.CV_MAX
+  const mouselessClick =
+    input.behavior != null &&
+    input.behavior.timeOnPage > TRADE_POLICY.BEHAVIOR.MIN_TIME_ON_PAGE_MS &&
+    input.behavior.mouseMoveCount === 0
+  if (regularInterval || mouselessClick) {
+    signals.push('BOT_TRADE_BEHAVIOR')
+    const parts: string[] = []
+    if (regularInterval) parts.push(`주문 간격 변동계수 ${intervalCv!.toFixed(3)}(임계 ${TRADE_POLICY.ORDER_INTERVAL.CV_MAX})`)
+    if (mouselessClick) parts.push(`거래 화면 체류 ${input.behavior!.timeOnPage}ms 중 마우스 이동 0회`)
+    reasons.push(`거래 자동화 의심 — ${parts.join(', ')}`)
+  }
+
   // ── 판정 조립 ─────────────────────────────────────────────
   //
   // 차단 신호가 하나라도 있으면 STEP_UP. 관측 신호만 선 경우는 판정을 바꾸지 않되
   // 기록은 남긴다 — 나중에 봇 탐지(A)가 이 이력을 신뢰도 입력으로 쓴다.
-  const gating = signals.filter((sig) => !OBSERVATIONAL_SIGNALS.has(sig))
+  //
+  // enforceManip 토글이 켜지면 시장 조작 계열(S10~S12)은 관측에서 벗어나 gating 으로
+  // 승격된다 — 단독으로도 STEP_UP(지갑 서명 재인증)을 유발한다. 기본은 관측이다.
+  const isObservationalNow = (sig: TradeSignal): boolean =>
+    OBSERVATIONAL_SIGNALS.has(sig) && !(input.enforceManip === true && MANIP_SIGNALS.has(sig))
+  const gating = signals.filter((sig) => !isObservationalNow(sig))
 
   const common = {
     signals,
@@ -774,6 +898,101 @@ export async function loadSameIpOrders(
   }))
 }
 
+/**
+ * S10 허수주문 — 사용자별 최근 창에서 (단명 지정가 취소 수, 전체 취소 수, 전체 주문 수).
+ * 모의투자만 취소 경로가 계측되므로 실거래는 null 을 돌려 미평가로 둔다.
+ * 단명 판정은 cancelled_at - ordered_at 을 마이크로초로 비교한다.
+ * cancelled_at 은 사용자 취소 경로에서만 찍힌다. 장 마감 만료·계좌 리셋·보유 부족 같은 시스템 취소는
+ * 사용자 의도가 아니므로 취소율에서도 뺀다 — 넣으면 리셋 직후 재주문만으로 허수주문 신호가 선다.
+ */
+export async function loadCancelPattern(
+  userId: number,
+  market: Market,
+): Promise<{ shortLivedCancels: number; totalCancels: number; totalOrders: number } | null> {
+  if (market !== 'virtual') return null
+  // 윈도우 하한은 DB 에서 직접 계산한다(NOW() - INTERVAL). JS Date 파라미터는 드라이버가
+  // Node 로컬 타임존으로 직렬화하는데 저장된 ordered_at·NOW() 는 DB(UTC) 기준이라, 둘을
+  // 섞으면 하한이 수 시간 어긋나 최근 주문이 통째로 제외된다. NOW() 와 ordered_at 은 같은
+  // 프레임이므로 DB 측 계산이 타임존에 안전하다.
+  const windowSec = Math.floor(TRADE_POLICY.SPOOFING.WINDOW_MS / 1000)
+  const shortMicros = TRADE_POLICY.SPOOFING.SHORT_LIVED_MS * 1000
+
+  const rows = await sequelize.query<{ short_lived: number; cancels: number; total: number }>(
+    `SELECT
+        SUM(CASE WHEN status = 'cancelled' AND order_type = 'limit' AND cancelled_at IS NOT NULL
+                 AND TIMESTAMPDIFF(MICROSECOND, ordered_at, cancelled_at) < :shortMicros
+                 THEN 1 ELSE 0 END) AS short_lived,
+        SUM(CASE WHEN status = 'cancelled' AND cancelled_at IS NOT NULL THEN 1 ELSE 0 END) AS cancels,
+        COUNT(*) AS total
+       FROM virtual_orders
+      WHERE user_id = :userId AND ordered_at >= (NOW() - INTERVAL :windowSec SECOND)`,
+    { replacements: { userId, windowSec, shortMicros }, type: QueryTypes.SELECT },
+  )
+  const r = rows[0]
+  if (!r) return { shortLivedCancels: 0, totalCancels: 0, totalOrders: 0 }
+  return {
+    shortLivedCancels: Number(r.short_lived ?? 0),
+    totalCancels: Number(r.cancels ?? 0),
+    totalOrders: Number(r.total ?? 0),
+  }
+}
+
+/**
+ * S11 자전거래 흔적 — 같은 사용자가 짧은 창에서 같은 종목을 매수·매도한 방향별 건수.
+ * 현재 주문은 아직 DB 에 없으므로 호출부에서 현재 방향을 +1 해 합산한다.
+ */
+export async function loadSelfChurn(
+  userId: number,
+  market: Market,
+  stockCode: string,
+): Promise<{ buyCount: number; sellCount: number }> {
+  const empty = { buyCount: 0, sellCount: 0 }
+  if (!stockCode) return empty
+  const table = market === 'real' ? 'real_orders' : 'virtual_orders'
+  const excluded = market === 'real' ? `('cancelled','failed')` : `('cancelled')`
+  // 윈도우 하한은 DB 측 계산(NOW() - INTERVAL) — JS Date 파라미터의 타임존 skew 회피.
+  const windowSec = Math.floor(TRADE_POLICY.SELF_CHURN.WINDOW_MS / 1000)
+
+  const rows = await sequelize.query<{ side: 'buy' | 'sell'; cnt: number }>(
+    `SELECT o.side, COUNT(*) AS cnt
+       FROM ${table} o
+       JOIN stocks s ON s.id = o.stock_id
+      WHERE o.user_id = :userId
+        AND s.code = :stockCode
+        AND o.ordered_at >= (NOW() - INTERVAL :windowSec SECOND)
+        AND o.status NOT IN ${excluded}
+      GROUP BY o.side`,
+    { replacements: { userId, stockCode, windowSec }, type: QueryTypes.SELECT },
+  )
+  const out = { ...empty }
+  for (const r of rows) {
+    if (r.side === 'buy') out.buyCount = Number(r.cnt)
+    else if (r.side === 'sell') out.sellCount = Number(r.cnt)
+  }
+  return out
+}
+
+/**
+ * S12-a 거래 자동화 — 사용자별 최근 창의 주문 시각들로부터 연속 간격(ms)을 만든다.
+ * 간격 변동계수가 아주 낮으면(일정 간격) 자동화 흔적으로 본다.
+ */
+export async function loadOrderIntervals(userId: number, market: Market): Promise<number[]> {
+  const table = market === 'real' ? 'real_orders' : 'virtual_orders'
+  // 윈도우 하한은 DB 측 계산(NOW() - INTERVAL) — JS Date 파라미터의 타임존 skew 회피.
+  const windowSec = Math.floor(TRADE_POLICY.ORDER_INTERVAL.WINDOW_MS / 1000)
+
+  const rows = await sequelize.query<{ ordered_at: Date | string }>(
+    `SELECT ordered_at FROM ${table}
+      WHERE user_id = :userId AND ordered_at >= (NOW() - INTERVAL :windowSec SECOND)
+      ORDER BY ordered_at ASC`,
+    { replacements: { userId, windowSec }, type: QueryTypes.SELECT },
+  )
+  const times = rows.map((r) => new Date(r.ordered_at).getTime()).filter((t) => Number.isFinite(t))
+  const intervals: number[] = []
+  for (let i = 1; i < times.length; i++) intervals.push(times[i] - times[i - 1])
+  return intervals
+}
+
 // ─────────────────────────────────────────────
 // 서비스 진입점 — 컨트롤러가 주문 실행 직전에 호출한다
 //
@@ -796,6 +1015,8 @@ export interface TradeRequestContext {
   // 지갑 서명 재인증 경로가 있는 시장인지. 모의투자는 있고(true), 실계좌는
   // 서명 채널이 없어 false — 이 경우 STEP_UP 은 경보·기록으로만 남긴다.
   stepUpAvailable?: boolean
+  // S12-b 거래 화면 자동화 — 클라이언트가 보낸 거래 화면 행동(마우스 없는 즉시 클릭).
+  behavior?: { mouseMoveCount: number; timeOnPage: number } | null
 }
 
 export async function evaluateTradeRequest(ctx: TradeRequestContext): Promise<TradeAssessment> {
@@ -808,17 +1029,25 @@ export async function evaluateTradeRequest(ctx: TradeRequestContext): Promise<Tr
   let sameIpOrders: SameIpOrder[] = []
   let riskContext: { minutesSinceCredentialChange: number | null; daysSinceLastActivity: number | null } =
     { minutesSinceCredentialChange: null, daysSinceLastActivity: null }
+  // 시장 조작·거래 자동화(S10~S12) 입력 — 실패해도 주문을 막지 않는 부가 신호다.
+  let cancelStats: { shortLivedCancels: number; totalCancels: number; totalOrders: number } | null = null
+  let selfChurn: { buyCount: number; sellCount: number } | null = null
+  let orderIntervals: number[] = []
 
   // 무결성 위반은 표본 조회 없이 즉시 판정한다 — 잘못된 주문으로 DB 를 두드리지 않는다.
   const integrity = validateOrderIntegrity(ctx.quantity, ctx.price)
   if (integrity.ok) {
     try {
-      const [h, d, rc, si] = await Promise.all([
+      const [h, d, rc, si, cp, sc, oi] = await Promise.all([
         loadTradeHistory(ctx.userId, ctx.market),
         loadDailyTotals(ctx.userId, ctx.market),
         loadRiskContext(ctx.userId, ctx.market),
         // M-7 은 실패해도 나머지 판정을 막지 않는다 — 크로스 계정 조회는 부가 신호다.
         loadSameIpOrders(ctx.market, ctx.ip, ctx.stockCode).catch(() => [] as SameIpOrder[]),
+        // S10~S12 — 시장 조작·자동화 신호도 실패해도 판정을 막지 않는다(관측 신호).
+        loadCancelPattern(ctx.userId, ctx.market).catch(() => null),
+        loadSelfChurn(ctx.userId, ctx.market, ctx.stockCode).catch(() => ({ buyCount: 0, sellCount: 0 })),
+        loadOrderIntervals(ctx.userId, ctx.market).catch(() => [] as number[]),
       ])
       history = h.amounts
       historyAt = h.times
@@ -828,9 +1057,18 @@ export async function evaluateTradeRequest(ctx: TradeRequestContext): Promise<Tr
       recentCount = d.recentCount
       sameIpOrders = si
       riskContext = rc
+      cancelStats = cp
+      selfChurn = sc
+      orderIntervals = oi
     } catch (err) {
       console.error('[TradeAnomaly] 베이스라인 조회 실패 — 비율 규칙만 적용:', err)
     }
+  }
+
+  // S11 — 현재 주문도 한 건으로 합산한다(아직 DB 에 없다).
+  if (selfChurn) {
+    if (ctx.side === 'buy') selfChurn = { ...selfChurn, buyCount: selfChurn.buyCount + 1 }
+    else selfChurn = { ...selfChurn, sellCount: selfChurn.sellCount + 1 }
   }
 
   const assessment = assessTrade({
@@ -847,6 +1085,11 @@ export async function evaluateTradeRequest(ctx: TradeRequestContext): Promise<Tr
     side: ctx.side,
     minutesSinceCredentialChange: riskContext.minutesSinceCredentialChange,
     daysSinceLastActivity: riskContext.daysSinceLastActivity,
+    cancelStats,
+    selfChurn,
+    orderIntervals,
+    behavior: ctx.behavior ?? null,
+    enforceManip: MARKET_MANIP_ENFORCE,
   })
 
   // 관측 전용 신호만 선 경우에도 기록은 남긴다 — 판정을 바꾸지 않을 뿐 이력은 자산이다.

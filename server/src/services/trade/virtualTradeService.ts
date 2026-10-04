@@ -563,7 +563,8 @@ export const cancelOrder = async (userId: number, orderId: number, ctx?: AccessC
     }
     // 매도 취소: 보유 수량은 변동 없으므로 그냥 cancelled로만 변경
 
-    await order.update({ status: 'cancelled' }, { transaction: t })
+    // cancelled_at 기록 — 허수주문(스푸핑) 판정이 생성→취소 지연과 취소 빈도를 본다.
+    await order.update({ status: 'cancelled', cancelled_at: new Date() }, { transaction: t })
     await t.commit()
   } catch (err) {
     await t.rollback()

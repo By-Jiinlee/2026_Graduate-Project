@@ -196,7 +196,10 @@ const anomalies: any[] = []
 EMAIL.sendNewDeviceAlert = async () => undefined
 EMAIL.sendAnomalyAlertEmail = async () => undefined
 GEO.getLocationFromIp = async () => ({})
-TD.verifyTrustedDevice = async (uid: number, token: string) => uid === VICTIM && token === 'victim-device-token'
+TD.verifyTrustedDevice = async (uid: number, token: string) => ({
+  trusted: uid === VICTIM && token === 'victim-device-token',
+  componentMismatch: false,
+})
 ANOMALY.recordTradeAuthAttempt = async () => undefined
 
 // ── 컨트롤러 호출 도우미 ──────────────────────────────────────
@@ -230,7 +233,7 @@ async function signAuth(key: typeof victimKey, wallet: string) {
 // 수정 전 loginStep2 재현(대조군) — 본문 userId·walletAddress 를 그대로 신원으로 쓰고,
 // 1단계 통과 여부와 지갑 소유를 확인하지 않았다. 반환값은 토큰이 발급되었을 사용자 번호.
 async function legacyStep2(cookies: Record<string, string>, body: any): Promise<number | null> {
-  const trusted = cookies.deviceToken ? await TD.verifyTrustedDevice(body.userId, cookies.deviceToken) : false
+  const trusted = cookies.deviceToken ? (await TD.verifyTrustedDevice(body.userId, cookies.deviceToken)).trusted : false
   if (!trusted && !body.signature) return null
   if (!trusted) {
     try {

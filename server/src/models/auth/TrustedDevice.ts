@@ -9,6 +9,7 @@ interface TrustedDeviceAttributes {
   device_type: DeviceType          // 유저당 pc 1대, mobile 1대로 제한
   device_token: string             // SHA-256 해시 저장 (쿠키에는 평문)
   device_fingerprint: string       // UA + IP 해시 — 토큰 탈취 감지용
+  component_fingerprint: string | null  // 캔버스·WebGL·오디오·폰트·타임존 조합 해시 — 하드웨어 지문(관측)
   user_agent: string | null
   ip: string | null
   label: string | null             // 예: "Chrome · Windows"
@@ -29,6 +30,7 @@ class TrustedDevice
   public device_type!: DeviceType
   public device_token!: string
   public device_fingerprint!: string
+  public component_fingerprint!: string | null
   public user_agent!: string | null
   public ip!: string | null
   public label!: string | null
@@ -44,6 +46,7 @@ TrustedDevice.init(
     device_type: { type: DataTypes.ENUM('pc', 'mobile'), allowNull: false },
     device_token: { type: DataTypes.STRING(64), allowNull: false, unique: true },
     device_fingerprint: { type: DataTypes.STRING(64), allowNull: false },
+    component_fingerprint: { type: DataTypes.STRING(64), allowNull: true },
     user_agent: { type: DataTypes.TEXT, allowNull: true },
     ip: { type: DataTypes.STRING(45), allowNull: true },
     label: { type: DataTypes.STRING(100), allowNull: true },

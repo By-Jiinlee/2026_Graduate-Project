@@ -16,6 +16,7 @@ import {
   linkRegisteredAccount,
   logAnomaly,
   recordAdaptiveDecision,
+  recordDeviceFingerprintMismatch,
 } from '../../services/auth/anomalyService'
 import { getClientIp } from '../../utils/getClientIp'
 import { accountDisplay, accountLoginKey, identifierDisplay, identifierLoginKey, maskPhone } from '../../utils/loginIdentifier'
@@ -203,10 +204,18 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
     // 신뢰 기기 확인
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
     const userAgent = req.headers['user-agent'] || 'unknown'
+    // 강화된 디바이스 핑거프린트 — 클라이언트가 보낸 하드웨어 컴포넌트 조합 해시.
+    const componentsHash = (req.headers['x-device-components'] as string) || null
     const rawDeviceToken = req.cookies[DEVICE_COOKIE_NAME]
     let isTrustedDevice = false
     if (rawDeviceToken) {
-      isTrustedDevice = await verifyTrustedDevice(result.userId, rawDeviceToken, userAgent, ip)
+      const check = await verifyTrustedDevice(result.userId, rawDeviceToken, userAgent, ip, componentsHash)
+      isTrustedDevice = check.trusted
+      // 컴포넌트 지문이 달라졌으면 기록한다 — 신뢰는 유지하되 위험 점수에 반영(관측/토글).
+      // 1단계에서 기록해야 2단계(강제 지점)가 anomaly_logs 재독해로 같은 신호를 본다.
+      if (check.componentMismatch) {
+        await recordDeviceFingerprintMismatch({ userId: result.userId, email: account.display, ip, userAgent })
+      }
     }
 
     // 이상탐지 미들웨어를 위한 locals 설정
@@ -293,9 +302,12 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     // 지갑 서명 생략 여부는 클라이언트 요청값(skipSignature)을 신뢰하지 않고 서버가 직접 재검증한다.
     // 요청 바디의 플래그를 그대로 쓰면 비밀번호만 아는 공격자가 서명 단계를 우회할 수 있다.
+    const componentsHash = (req.headers['x-device-components'] as string) || null
     const rawDeviceToken = req.cookies?.[DEVICE_COOKIE_NAME]
+    // 2단계는 신뢰 여부만 본다 — 컴포넌트 불일치는 1단계에서 이미 기록됐고,
+    // 아래 collectRiskSignals 가 anomaly_logs 재독해로 그 신호를 위험 점수에 반영한다.
     const isTrustedDevice = rawDeviceToken
-      ? await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip)
+      ? (await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip, componentsHash)).trusted
       : false
 
     // ── 적응형 인증(H) — 요구 강도를 서버에서 재계산해 강제한다 ──────────
@@ -399,7 +411,7 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     // 기기 기억하기
     if (rememberDevice) {
-      const rawDeviceToken = await registerTrustedDevice(userId, userAgent, ip)
+      const rawDeviceToken = await registerTrustedDevice(userId, userAgent, ip, componentsHash)
       res.cookie(DEVICE_COOKIE_NAME, rawDeviceToken, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
@@ -695,10 +707,11 @@ export const listTrustedDevices = async (req: Request, res: Response) => {
     const userId = (req as any).user.id
     const userAgent = req.headers['user-agent'] ?? 'unknown'
     const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    const componentsHash = (req.headers['x-device-components'] as string) || null
     const rawDeviceToken = req.cookies[DEVICE_COOKIE_NAME]
     let isTrustedDevice = false
     if (rawDeviceToken) {
-      isTrustedDevice = await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip)
+      isTrustedDevice = (await verifyTrustedDevice(userId, rawDeviceToken, userAgent, ip, componentsHash)).trusted
     }
     const devices = await getTrustedDevices(userId)
     return res.status(200).json({ devices, isTrustedDevice })
@@ -726,10 +739,11 @@ export const registerDevice = async (req: Request, res: Response) => {
     const userId = (req as any).user.id
     const userAgent = req.headers['user-agent'] ?? 'unknown'
     const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    const componentsHash = (req.headers['x-device-components'] as string) || null
 
     // 기존 기기 전체 해제 후 현재 기기 신규 등록
     await revokeAllTrustedDevices(userId)
-    const rawDeviceToken = await registerTrustedDevice(userId, userAgent, ip)
+    const rawDeviceToken = await registerTrustedDevice(userId, userAgent, ip, componentsHash)
     res.cookie(DEVICE_COOKIE_NAME, rawDeviceToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
