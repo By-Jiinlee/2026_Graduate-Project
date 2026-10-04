@@ -1,11 +1,14 @@
 import { Router } from 'express'
 import { isAuthenticated } from '../../middleware/auth/authMiddleware'
+import { requireAnyVerified } from '../../middleware/auth/verificationTierMiddleware'
 import { hmacMiddleware } from '../../middleware/security/hmacMiddleware'
 import * as ctrl from '../../controllers/trade/tradePinController'
 
 const router = Router()
 
 router.use(isAuthenticated)
+// PIN 은 모의투자·실거래 공용 — 낮은 쪽(모의투자) 기준. 실거래 주문 자체는 realTradeRouter 가 둘 다 인증을 요구한다.
+router.use(requireAnyVerified)
 
 // 다른 거래 라우터와 동일하게 상태 변경 요청에 HMAC 서명을 강제한다.
 // 클라이언트 서명 범위(tradeSigning.requiresSignature)가 '/api/trade/' 전체이므로

@@ -26,6 +26,8 @@ export default function Register() {
   const [smsVerified, setSmsVerified] = useState(false)
   const [walletAddress, setWalletAddress] = useState('')
   const [walletSignature, setWalletSignature] = useState('')
+  // 지갑 서명에 묶은 가입 신원. 서명 뒤에 인증 수단이 바뀌면 서버가 서명을 거절하므로 다시 받는다.
+  const [signedIdentity, setSignedIdentity] = useState('')
   const [walletConflict, setWalletConflict] = useState(false)
   const [error, setError] = useState('')
   const [showSuccessModal, setShowSuccessModal] = useState(false)
@@ -38,6 +40,8 @@ export default function Register() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value })
+    // 지갑 서명은 가입 이메일에 묶여 있다. 이메일이 바뀌면 이전 서명은 서버에서 거절되므로 다시 받는다.
+    if (e.target.name === 'email' || e.target.name === 'phone') setWalletSignature('')
   }
 
   const handleAgreement = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -58,9 +62,17 @@ export default function Register() {
     agreements.location_agreed &&
     agreements.age_agreed
 
+  // 본인 인증은 이메일·휴대폰 중 하나면 된다. 이메일은 로그인 아이디라 어느 쪽이든 입력해야 한다.
+  // 가입 신원 — 인증한 이메일이 있으면 이메일, 없으면 인증한 휴대폰 번호
+  const signupIdentity = emailVerified
+    ? form.email.trim().toLowerCase()
+    : smsVerified ? `phone:${form.phone.trim()}` : ''
+
+  // 본인 인증은 이메일·휴대폰 중 하나면 된다. 인증한 쪽이 로그인 아이디가 된다.
   const canSubmit =
     (emailVerified || smsVerified) &&
     !!walletSignature &&
+    signedIdentity === signupIdentity &&
     requiredAgreed &&
     form.password === form.confirm &&
     pwRules.every((r) => r.ok)
@@ -136,6 +148,7 @@ export default function Register() {
       setError('')
       setWalletConflict(false)
       if (!window.ethereum) throw new Error('MetaMask가 설치되어 있지 않습니다')
+      if (!signupIdentity) throw new Error('지갑 서명 전에 이메일 또는 휴대폰 인증을 먼저 완료해주세요')
 
       if (forceAccountSelect) {
         await window.ethereum.request({
@@ -168,12 +181,15 @@ export default function Register() {
       const CONTRACT_ADDRESS = '0xe7BBeA01683414DEd829f08e8d6822eF0CD7a38a'
       const CHAIN_ID = BigInt(11155111) // Sepolia
 
+      // 서버 buildRegisterMessage 와 같은 형식. 로그인 메시지(논스 0)와 해시가 겹치지 않도록
+      // 가입 용도 태그를 넣고, 가입 이메일을 묶어 이 서명을 다른 계정 가입에 쓰지 못하게 한다.
       const innerHash = keccak256(
         concat([
           toBytes(CHAIN_ID, { size: 32 }),
           toBytes(getAddress(CONTRACT_ADDRESS), { size: 20 }),
           toBytes(getAddress(address), { size: 20 }),
-          toBytes(BigInt(0), { size: 32 }), // nonce = 0 (회원가입)
+          keccak256(toBytes('UPTICK_WALLET_REGISTRATION_V1'), 'bytes'),
+          keccak256(toBytes(signupIdentity), 'bytes'),
         ]),
       )
 
@@ -182,6 +198,7 @@ export default function Register() {
         params: [innerHash, address],
       })
       setWalletSignature(signature)
+      setSignedIdentity(signupIdentity)
     } catch (err: any) {
       setError(err.message)
     }
@@ -195,10 +212,11 @@ export default function Register() {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          email: form.email,
+          email: emailVerified ? form.email.trim() : '',
           password: form.password,
           name: form.name,
-          phone: form.phone,
+          // 인증하지 않은 번호는 보내지 않는다 — 서버는 보낸 번호가 인증된 번호인지 확인하고 아니면 가입을 거부한다
+          phone: smsVerified ? form.phone : '',
           walletAddress,
           walletSignature,
           ...agreements,
@@ -484,6 +502,9 @@ export default function Register() {
             {/* 휴대폰 인증 입력창 */}
             {authMethod === 'phone' && (
               <div style={{ marginTop: '12px' }}>
+                <p style={{ fontSize: '12px', color: '#888', margin: '0 0 10px' }}>
+                  휴대폰으로 가입하면 휴대폰 번호로 로그인합니다. 이메일은 가입 후 마이페이지에서 등록할 수 있습니다.
+                </p>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     type="text"

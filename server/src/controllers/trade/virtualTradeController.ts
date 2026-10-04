@@ -3,6 +3,8 @@ import * as tradeService from '../../services/trade/virtualTradeService'
 import { getClientIp } from '../../utils/getClientIp'
 import { getLocationFromIp } from '../../utils/getLocationFromIp'
 import { evaluateTradeRequest, TradeAssessment } from '../../services/auth/tradeAnomalyService'
+import { getOrderProof as getLedgerOrderProof } from '../../services/web3/ledgerAnchorService'
+import { assertMarketOpen, getMarketSession, isMarketHoursEnforced, MarketClosedError } from '../../services/market/marketCalendar'
 
 // 조회 계열은 요청 문맥을 서비스로 넘기지 않았다. 카나리 탐지 로그에 IP·UA 가
 // 남아야 이후 위험 점수 산정(riskEngine)에서 그 IP 를 다시 식별할 수 있다.
@@ -81,6 +83,16 @@ export const buyStock = async (req: Request, res: Response) => {
       return res.status(400).json({ message: '지정가 주문에는 가격이 필요합니다' })
     }
 
+    // 장 운영 시간 — PIN·이상탐지보다 먼저 본다. 장 외 주문이 PIN 시도·거래 판정 기록을 남기지 않게 한다.
+    try {
+      await assertMarketOpen()
+    } catch (err) {
+      if (err instanceof MarketClosedError) {
+        return res.status(409).json({ message: err.message, code: 'MARKET_CLOSED', nextOpen: err.nextOpen.toISOString() })
+      }
+      throw err
+    }
+
     const ip = getClientIp(req)
     const userAgent = req.headers['user-agent']
 
@@ -145,6 +157,16 @@ export const sellStock = async (req: Request, res: Response) => {
     }
     if (orderType === 'limit' && !limitPrice) {
       return res.status(400).json({ message: '지정가 주문에는 가격이 필요합니다' })
+    }
+
+    // 장 운영 시간 — PIN·이상탐지보다 먼저 본다. 장 외 주문이 PIN 시도·거래 판정 기록을 남기지 않게 한다.
+    try {
+      await assertMarketOpen()
+    } catch (err) {
+      if (err instanceof MarketClosedError) {
+        return res.status(409).json({ message: err.message, code: 'MARKET_CLOSED', nextOpen: err.nextOpen.toISOString() })
+      }
+      throw err
     }
 
     const ip = getClientIp(req)
@@ -238,6 +260,22 @@ export const getOrders = async (req: Request, res: Response) => {
   }
 }
 
+// ─── 체결 장부 포함 증명 ──────────────────────────────────────
+// 자기 체결 주문이 그날 고정된 장부에 들어 있다는 머클 증명. 조회 대상은 본인 주문으로 한정한다
+// (getOrderProof 가 user_id 로 함께 조회 — 다른 사람 주문 번호를 넣으면 "찾을 수 없음").
+export const getOrderProof = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user.id
+    const orderId = Number(req.params.orderId)
+    if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ message: '주문 번호가 올바르지 않습니다' })
+    }
+    res.json(await getLedgerOrderProof(userId, orderId))
+  } catch (err: any) {
+    res.status(404).json({ message: err.message })
+  }
+}
+
 // ─── 포트폴리오 조회 ──────────────────────────────────────────
 
 export const getPortfolio = async (req: Request, res: Response) => {
@@ -246,6 +284,24 @@ export const getPortfolio = async (req: Request, res: Response) => {
     const portfolio = await tradeService.getPortfolio(userId, reqContext(req))
     if (!portfolio) return res.status(404).json({ message: '모의투자 계좌가 없습니다' })
     res.json(portfolio)
+  } catch (err: any) {
+    res.status(500).json({ message: err.message })
+  }
+}
+
+// ─── 장 운영 상태 ─────────────────────────────────────────────
+// 주문 화면이 장 외 시간에 주문 버튼을 막고 다음 개장 시각을 보여 주는 데 쓴다.
+export const getMarketStatus = async (_req: Request, res: Response) => {
+  try {
+    const s = await getMarketSession()
+    res.json({
+      enforced: isMarketHoursEnforced(),
+      state: s.state,
+      open: isMarketHoursEnforced() ? s.open : true,
+      hours: '09:00-15:30',
+      nextOpen: s.nextOpen.toISOString(),
+      todayClose: s.todayClose.toISOString(),
+    })
   } catch (err: any) {
     res.status(500).json({ message: err.message })
   }

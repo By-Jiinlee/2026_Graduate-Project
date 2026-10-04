@@ -3,7 +3,8 @@ import sequelize from '../../config/database'
 
 interface UserAttributes {
   id: number
-  email: string
+  // 휴대폰 인증만으로 가입한 계정은 이메일이 없다(로그인은 휴대폰 번호). 마이그레이션 20261001_phone_login.sql
+  email: string | null
   password_hash: string
   name: string
   nickname?: string | null
@@ -40,7 +41,7 @@ class User
   implements UserAttributes
 {
   public id!: number
-  public email!: string
+  public email!: string | null
   public password_hash!: string
   public name!: string
   public nickname?: string | null
@@ -71,7 +72,7 @@ class User
 User.init(
   {
     id: { type: DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
-    email: { type: DataTypes.STRING(100), allowNull: false, unique: true },
+    email: { type: DataTypes.STRING(100), allowNull: true, unique: true },
     password_hash: { type: DataTypes.STRING(255), allowNull: false },
     name: { type: DataTypes.STRING(50), allowNull: false },
     nickname: { type: DataTypes.STRING(30), allowNull: true, unique: true },

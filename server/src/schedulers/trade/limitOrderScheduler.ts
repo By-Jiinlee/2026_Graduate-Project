@@ -5,7 +5,14 @@ import VirtualOrder from '../../models/trade/VirtualOrder'
 import VirtualAccount from '../../models/trade/VirtualAccount'
 import VirtualHolding from '../../models/trade/VirtualHolding'
 import { priceMap } from '../../services/market/KisRealtime'
-import { emitOrderFilled } from '../../services/socket/userChannel'
+import { emitOrderFilled, emitToUser } from '../../services/socket/userChannel'
+import cron from 'node-cron'
+import {
+    getMarketSessionCached,
+    isMarketHoursEnforced,
+    warmCalendar,
+    type MarketSession,
+} from '../../services/market/marketCalendar'
 
 const FEE_RATE = 0.00015
 const INTERVAL_MS = 5000
@@ -19,16 +26,21 @@ interface PendingOrderRow {
     quantity: number
     price: number
     total_amount: number
+    ordered_at: Date | string
 }
 
-export const processPendingOrders = async (): Promise<void> => {
-    if (priceMap.size === 0) return
+// 지정가 주문은 당일 유효 — 실제 증권사의 일반 지정가 주문과 같다. 이 주문이 이미 끝난 장에서
+// 들어온 것인가: 지금 장이 닫혀 있으면 모든 미체결이, 장 중이면 오늘 개장 전에 들어온 주문이 해당한다.
+// (장 외 주문 접수는 막혀 있으므로, 장 중에 개장 전 주문이 남아 있다면 서버 중단 등으로 만료를 놓친 것이다.)
+export const isExpiredDayOrder = (orderedAt: Date | string, session: MarketSession): boolean =>
+    !session.open || new Date(orderedAt).getTime() < session.todayOpen.getTime()
 
+export const processPendingOrders = async (now = new Date()): Promise<void> => {
     let pendingOrders: PendingOrderRow[]
     try {
         pendingOrders = await sequelize.query<PendingOrderRow>(
             `SELECT vo.id, vo.user_id, vo.stock_id, s.code AS stock_code,
-                    vo.side, vo.quantity, vo.price, vo.total_amount
+                    vo.side, vo.quantity, vo.price, vo.total_amount, vo.ordered_at
              FROM virtual_orders vo
              JOIN stocks s ON s.id = vo.stock_id
              WHERE vo.status = 'pending' AND vo.order_type = 'limit'`,
@@ -37,6 +49,21 @@ export const processPendingOrders = async (): Promise<void> => {
     } catch {
         return
     }
+
+    const enforce = isMarketHoursEnforced()
+    const session = getMarketSessionCached(now)
+    if (enforce) {
+        const expired = pendingOrders.filter(o => isExpiredDayOrder(o.ordered_at, session))
+        for (const order of expired) {
+            expireDayOrder(order).catch(err =>
+                console.error(`[LimitScheduler] 주문 ${order.id} 만료 처리 오류:`, (err as Error).message)
+            )
+        }
+        // 장이 닫혀 있으면 체결하지 않는다
+        if (!session.open) return
+        pendingOrders = pendingOrders.filter(o => !isExpiredDayOrder(o.ordered_at, session))
+    }
+    if (priceMap.size === 0) return
 
     for (const order of pendingOrders) {
         const currentPrice = priceMap.get(order.stock_code)
@@ -130,8 +157,53 @@ const fillLimitOrder = async (order: PendingOrderRow): Promise<void> => {
     }
 }
 
+// ─── 장 마감 후 미체결 만료 ───────────────────────────────────
+// 매수는 주문 때 차감한 예약금(수수료 포함)을 돌려주고, 매도는 보유 수량을 건드린 적이 없으므로 상태만 바꾼다.
+// 사용자 취소(cancelOrder)와 같은 회계 규칙이다.
+const expireDayOrder = async (order: PendingOrderRow): Promise<void> => {
+    const t: Transaction = await sequelize.transaction()
+    try {
+        const dbOrder = await VirtualOrder.findByPk(order.id, { transaction: t, lock: true })
+        if (!dbOrder || dbOrder.status !== 'pending') {
+            await t.rollback()
+            return
+        }
+        if (dbOrder.side === 'buy') {
+            const account = await VirtualAccount.findOne({
+                where: { user_id: dbOrder.user_id },
+                transaction: t,
+                lock: true,
+            })
+            if (account) {
+                await account.update(
+                    { seed_balance: Number(account.seed_balance) + Number(dbOrder.total_amount) },
+                    { transaction: t }
+                )
+            }
+        }
+        await dbOrder.update({ status: 'cancelled' }, { transaction: t })
+        await t.commit()
+
+        emitToUser(order.user_id, 'order:expired', {
+            orderId: order.id,
+            stockCode: order.stock_code,
+            side: order.side,
+            quantity: order.quantity,
+            price: Number(order.price),
+            refunded: order.side === 'buy' ? Number(order.total_amount) : 0,
+        })
+        console.log(`[LimitScheduler] 주문 ${order.id} 장 마감 미체결 만료${order.side === 'buy' ? ' — 예약금 환불' : ''}`)
+    } catch (err) {
+        await t.rollback()
+        throw err
+    }
+}
+
 export const startLimitOrderScheduler = (): void => {
-    console.log('[LimitScheduler] 지정가 주문 체결 스케줄러 시작 (5초 주기)')
+    // 휴장일 캐시 — 기동 시 1회, 매일 00:05 갱신(체결 루프는 이 캐시로 동기 판정한다)
+    warmCalendar().catch(() => undefined)
+    cron.schedule('5 0 * * *', () => { warmCalendar().catch(() => undefined) }, { timezone: 'Asia/Seoul' })
+    console.log(`[LimitScheduler] 지정가 주문 체결 스케줄러 시작 (5초 주기, 장 운영 시간 ${isMarketHoursEnforced() ? '적용 — 정규장 09:00~15:30, 당일 유효' : '미적용(MOCK_MARKET_HOURS=off)'})`)
     setInterval(() => {
         processPendingOrders().catch(err =>
             console.error('[LimitScheduler] 처리 오류:', (err as Error).message)

@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   )
   const types = (col?.COLUMN_TYPE ?? '').replace(/^enum\(|\)$/g, '').split(',').map((s) => s.replace(/'/g, ''))
   console.log(`anomaly_type ENUM ${types.length}종: ${types.join(', ')}`)
-  for (const required of ['ABNORMAL_TRADE_AMOUNT', 'ADVERSARIAL_INPUT', 'INFERENCE_ABUSE']) {
+  for (const required of ['ABNORMAL_TRADE_AMOUNT', 'ADVERSARIAL_INPUT', 'INFERENCE_ABUSE', 'MULTI_ACCOUNT_DEVICE', 'LEDGER_TAMPERING']) {
     console.log(`  ${types.includes(required) ? 'OK  ' : 'MISS'} ${required}`)
   }
 
@@ -27,11 +27,13 @@ async function main(): Promise<void> {
             GROUP_CONCAT(column_name ORDER BY seq_in_index) AS COLS
        FROM information_schema.statistics
       WHERE table_schema = DATABASE()
-        AND index_name IN ('idx_virtual_orders_user_time', 'idx_real_orders_user_time')
+        AND index_name IN ('idx_virtual_orders_user_time', 'idx_real_orders_user_time',
+                           'uq_wallet_nonce_use', 'uq_device_account', 'idx_device_last_seen',
+                           'uq_ledger_anchor_date')
       GROUP BY table_name, index_name`,
     { type: QueryTypes.SELECT },
   )
-  console.log(`베이스라인 조회 인덱스 ${idx.length}개`)
+  console.log(`조회·유일 인덱스 ${idx.length}개 (기대 6개)`)
   for (const r of idx) console.log(`  OK   ${r.TABLE_NAME}.${r.INDEX_NAME} (${r.COLS})`)
 
   await sequelize.close()

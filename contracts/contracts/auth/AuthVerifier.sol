@@ -26,12 +26,12 @@ contract AuthVerifier {
     }
 
     // ─── 서버 전용 대리 등록 ───────────────────────────────────────
+    // 논스는 등록·해제와 무관하게 절대 되돌리지 않는다. 이전 버전은 등록·해제 때 논스를
+    // 0 으로 초기화해서, 탈퇴한 지갑을 다시 등록하면 과거에 쓰인 0..k 번 서명이 다시 유효해졌다.
     function registerWalletFor(address wallet) external onlyOwner {
         require(wallet != address(0), "Invalid address");
         require(!registeredWallets[wallet], "Already registered");
         registeredWallets[wallet] = true;
-        authNonces[wallet] = 0;
-        tradeNonces[wallet] = 0;
         emit WalletRegistered(wallet);
     }
 
@@ -39,8 +39,6 @@ contract AuthVerifier {
     function unregisterWallet(address wallet) external onlyOwner {
         require(registeredWallets[wallet], "Not registered");
         registeredWallets[wallet] = false;
-        authNonces[wallet] = 0;
-        tradeNonces[wallet] = 0;
         emit WalletUnregistered(wallet);
     }
 
@@ -134,6 +132,13 @@ contract AuthVerifier {
 
         if (v < 27) v += 27;
         require(v == 27 || v == 28, "Invalid signature v value");
+        // EIP-2: s 가 곡선 위수의 절반보다 크면 같은 메시지에 대한 두 번째 유효 서명(가변 서명)이다.
+        // 논스가 소비되면 둘 다 무효가 되지만, 서명값 자체를 식별자로 쓰는 상위 로직이 생겨도
+        // 같은 승인이 두 개의 다른 값으로 존재하지 않도록 낮은 s 만 받는다.
+        require(
+            uint256(s) <= 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0,
+            "Invalid signature s value"
+        );
 
         address recovered = ecrecover(message, v, r, s);
         require(recovered != address(0), "Invalid signature");

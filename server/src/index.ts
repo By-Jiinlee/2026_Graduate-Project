@@ -13,6 +13,7 @@ import { initUserChannels } from './services/socket/userChannel'
 import authRouter from './routes/auth/authRouter'
 import contractTestRouter from './routes/auth/contractTestRouter'
 import honeypotRouter from './routes/security/honeypotRouter'
+import { deviceIdMiddleware } from './middleware/security/deviceIdMiddleware'
 import adminRouter from './routes/security/adminRouter'
 import { ipBlockMiddleware } from './middleware/security/ipBlockMiddleware'
 import virtualTradeRouter from './routes/trade/virtualTradeRouter'
@@ -39,6 +40,7 @@ import { startStabilityScheduler } from './schedulers/market/Stability'
 import { startKisRealtime } from './services/market/KisRealtime'
 import { startMarketIndexRealtime } from './services/market/MarketIndexRealtime'
 import { startLimitOrderScheduler } from './schedulers/trade/limitOrderScheduler'
+import { startLedgerAnchorScheduler } from './schedulers/trade/ledgerAnchorScheduler'
 
 
 dotenv.config()
@@ -63,6 +65,7 @@ app.use(cors(corsOptions))
 // 보안 미들웨어 — 모든 라우터보다 먼저 실행
 app.use(ipBlockMiddleware)  // 인메모리 IP 차단 목록 검사
 app.use(honeypotRouter)     // 허니팟 경로 탐지
+app.use('/api', deviceIdMiddleware) // 단말 식별 쿠키 — 1인 1계정 감시(다계정 단말 탐지)
 
 // 라우터
 app.use('/api/auth', authRouter)
@@ -119,6 +122,9 @@ httpServer.listen(PORT, () => {
 
         // DB 계산 — 수집이 끝난 뒤 실행
         startStock52WeekScheduler()             // 52주 신고저 평일 19:50
+
+        // 모의투자 체결 장부 고정 — 배포 서버 한 곳에서만(로컬이 공유 DB 에 고정 기록을 남기지 않게)
+        startLedgerAnchorScheduler()            // 체결 장부   매일 00:10
 
         //startStabilityScheduler() //안정성 계산 — AI 피처에 쓰이지 않아 보류
     }

@@ -31,17 +31,37 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
   const [showPin, setShowPin] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null)
-  const [isPhoneVerified, setIsPhoneVerified] = useState<boolean | null>(null)
+  // 인증 등급 — 모의투자는 이메일·휴대폰 중 하나, 실거래는 둘 다(서버 verificationTierMiddleware 와 같은 규칙)
+  const [verified, setVerified] = useState<{ email: boolean; phone: boolean } | null>(null)
 
   // 실거래 상태
   const [realStatus, setRealStatus] = useState<'loading' | 'not_registered' | 'registered'>('loading')
   const [realBuyable, setRealBuyable] = useState<number | null>(null)
+  // 모의투자 장 운영 상태 — 서버(marketCalendar)가 정규장·휴장일을 판정한다. 화면은 안내와 버튼 잠금만 한다.
+  const [market, setMarket] = useState<{ open: boolean; state: string; nextOpen: string } | null>(null)
+
+  useEffect(() => {
+    if (mode === 'real' || !isLoggedIn()) return
+    let alive = true
+    const load = () =>
+      axios.get(`${API_BASE}/api/trade/virtual/market-status`, { withCredentials: true })
+        .then(r => { if (alive) setMarket(r.data) })
+        .catch(() => { if (alive) setMarket(null) })
+    load()
+    const timer = setInterval(load, 60_000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [mode])
+
+  const marketClosed = mode !== 'real' && market !== null && !market.open
+  const nextOpenLabel = market
+    ? new Date(market.nextOpen).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })
+    : ''
 
   useEffect(() => {
     if (!isLoggedIn()) return
     axios.get(`${API_BASE}/api/auth/me`, { withCredentials: true })
-      .then(res => setIsPhoneVerified(!!res.data.is_phone_verified))
-      .catch(() => setIsPhoneVerified(false))
+      .then(res => setVerified({ email: !!res.data.is_email_verified, phone: !!res.data.is_phone_verified }))
+      .catch(() => setVerified({ email: false, phone: false }))
   }, [])
 
   useEffect(() => {
@@ -133,6 +153,15 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
       const nonce = BigInt(nonceRes.data.nonce)
       const contractAddress = getAddress(import.meta.env.VITE_CONTRACT_AUTH_ADDRESS as string)
       const amount = BigInt(Math.round(price * Number(quantity)))
+      // 서버 buildTradeDescriptor 와 같은 형식. 종목만이 아니라 매수/매도·주문 유형·수량·지정가까지
+      // 서명에 묶어야, 이 서명으로 다른 수량이나 반대 방향 주문을 통과시킬 수 없다.
+      const descriptor = [
+        stockCode,
+        side,
+        orderType,
+        String(Number(quantity)),
+        orderType === 'limit' ? String(Number(limitPrice)) : '0',
+      ].join('|')
 
       const msgHash = keccak256(
         concat([
@@ -141,7 +170,7 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
           toBytes(address,            { size: 20 }),
           toBytes(nonce,              { size: 32 }),
           toBytes(amount,             { size: 32 }),
-          new TextEncoder().encode(stockCode),
+          new TextEncoder().encode(descriptor),
         ])
       )
 
@@ -192,7 +221,10 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
     )
   }
 
-  if (isLoggedIn() && isPhoneVerified === false) {
+  const missingForMode = verified === null ? [] : mode === 'real'
+    ? [!verified.email && '이메일', !verified.phone && '휴대폰'].filter(Boolean) as string[]
+    : (verified.email || verified.phone) ? [] : ['이메일 또는 휴대폰']
+  if (isLoggedIn() && missingForMode.length > 0) {
     return (
       <div style={{
         backgroundColor: '#fff',
@@ -202,12 +234,14 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
         textAlign: 'center',
       }}>
         <p style={{ fontSize: '28px', marginBottom: '12px' }}>📵</p>
-        <p style={{ fontWeight: '700', fontSize: '15px', color: '#111', marginBottom: '6px' }}>휴대폰 인증이 필요합니다</p>
+        <p style={{ fontWeight: '700', fontSize: '15px', color: '#111', marginBottom: '6px' }}>{missingForMode.join('·')} 인증이 필요합니다</p>
         <p style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '20px' }}>
-          실거래 및 모의투자는<br />휴대폰 인증 완료 후 이용 가능합니다
+          {mode === 'real'
+            ? <>실거래는 이메일과 휴대폰 인증을<br />모두 완료한 뒤 이용할 수 있습니다</>
+            : <>모의투자는 이메일 또는 휴대폰 인증을<br />완료한 뒤 이용할 수 있습니다</>}
         </p>
         <button
-          onClick={() => navigate('/mypage')}
+          onClick={() => navigate('/mypage?tab=security')}
           style={{
             padding: '10px 28px',
             backgroundColor: '#22C55E',
@@ -457,6 +491,11 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
               모의투자
             </span>
             <span style={{ fontSize: '13px', color: '#6b7280', fontWeight: '500' }}>{stockName}</span>
+            {market && (
+              <span style={{ marginLeft: 'auto', fontSize: '11px', fontWeight: '700', color: market.open ? '#15803d' : '#b45309' }}>
+                {market.open ? '● 장 중' : `장 마감 · 다음 개장 ${nextOpenLabel}`}
+              </span>
+            )}
           </div>
 
           {/* 주문 유형 */}
@@ -596,24 +635,24 @@ export default function OrderPanel({ stockId, stockCode, stockName, currentPrice
           {/* 주문 버튼 */}
           <button
             onClick={handleOrderClick}
-            disabled={loading}
+            disabled={loading || marketClosed}
             style={{
               width: '100%',
               padding: '14px',
               borderRadius: '12px',
               border: 'none',
-              cursor: loading ? 'not-allowed' : 'pointer',
+              cursor: loading || marketClosed ? 'not-allowed' : 'pointer',
               fontSize: '15px',
               fontWeight: '800',
-              backgroundColor: loading ? '#e5e7eb' : (side === 'buy' ? '#ef4444' : '#3b82f6'),
-              color: loading ? '#9ca3af' : '#fff',
+              backgroundColor: loading || marketClosed ? '#e5e7eb' : (side === 'buy' ? '#ef4444' : '#3b82f6'),
+              color: loading || marketClosed ? '#9ca3af' : '#fff',
               transition: 'all 0.15s',
               letterSpacing: '0.02em',
             }}
             onMouseEnter={e => { if (!loading) e.currentTarget.style.opacity = '0.88' }}
             onMouseLeave={e => { e.currentTarget.style.opacity = '1' }}
           >
-            {loading ? '처리 중...' : `${side === 'buy' ? '매수' : '매도'} 주문`}
+            {loading ? '처리 중...' : marketClosed ? '정규장(09:00~15:30)에만 주문할 수 있습니다' : `${side === 'buy' ? '매수' : '매도'} 주문`}
           </button>
         </div>
       </div>

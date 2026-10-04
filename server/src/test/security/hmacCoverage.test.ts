@@ -26,8 +26,9 @@ function check(name: string, ok: boolean, detail = ''): void {
   else { fail++; failures.push(`${name}${detail ? ` — ${detail}` : ''}`) }
 }
 
-// 인증·휴대폰인증·컨트롤러를 스텁으로 갈아끼운다 — 검증 대상은 hmacMiddleware 배선뿐이다.
-const TEST_USER = { id: 999_999_100, email: 'coverage@test.local' }
+// 인증·컨트롤러를 스텁으로 갈아끼운다 — 검증 대상은 hmacMiddleware 배선뿐이다.
+// 인증 등급 미들웨어(verificationTierMiddleware)는 실제 코드를 그대로 통과시키도록 두 인증을 모두 갖춘 사용자로 둔다
+const TEST_USER = { id: 999_999_100, email: 'coverage@test.local', is_email_verified: true, is_phone_verified: true }
 
 require.cache[require.resolve('../../middleware/auth/authMiddleware')] = {
   id: require.resolve('../../middleware/auth/authMiddleware'),
@@ -38,12 +39,6 @@ require.cache[require.resolve('../../middleware/auth/authMiddleware')] = {
   },
 } as any
 
-require.cache[require.resolve('../../middleware/auth/phoneVerifiedMiddleware')] = {
-  id: require.resolve('../../middleware/auth/phoneVerifiedMiddleware'),
-  filename: require.resolve('../../middleware/auth/phoneVerifiedMiddleware'),
-  loaded: true,
-  exports: { requirePhoneVerified: (_req: any, _res: any, next: any) => next() },
-} as any
 
 function stubController(modulePath: string): void {
   const resolved = require.resolve(modulePath)

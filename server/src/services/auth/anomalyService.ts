@@ -1,4 +1,4 @@
-import { Op, literal } from 'sequelize'
+import { Op, literal, UniqueConstraintError } from 'sequelize'
 import AnomalyLog, { AnomalyType, AnomalyAction } from '../../models/auth/AnomalyLog'
 import LoginAttempt from '../../models/auth/LoginAttempt'
 import LoginRecord from '../../models/auth/LoginRecord'
@@ -9,6 +9,7 @@ import type { VerifyReason } from './hmacService'
 import { blockIP, isPrivateIp } from '../../middleware/security/ipBlockMiddleware'
 import { haversineKm, isValidPoint, travelSpeedKmh } from '../../utils/geoDistance'
 import TradeAuthAttempt, { TradeAuthMethod } from '../../models/auth/TradeAuthAttempt'
+import DeviceAccountLink, { DeviceLinkEvent } from '../../models/auth/DeviceAccountLink'
 
 // ─────────────────────────────────────────────
 // 설정 상수
@@ -58,6 +59,11 @@ export interface LoginContext {
   userAgent?: string
   success: boolean
   isStep2?: boolean  // Step2(MetaMask)에서 호출 시 true — 시도 기록 중복 방지용
+  deviceHash?: string // 단말 식별 쿠키의 HMAC — 다계정 단말 탐지용
+  // 무차별 대입 집계 키(계정 기준 — 이메일·휴대폰 로그인 공용). 없으면 email 로 집계
+  loginKey?: string
+  // 실패한 로그인에서도 해석된 계정 — 비밀번호가 틀린 요청이라 userId 가 없을 때 잠금 대상
+  accountId?: number
 }
 
 export interface AnomalyResult {
@@ -83,15 +89,22 @@ export async function analyzeLoginAttempt(ctx: LoginContext): Promise<AnomalyRes
 
   // 병렬 탐지 실행
   // ABNORMAL_TIME/CONCURRENT_SESSION/ABNORMAL_COUNTRY는 로그인 성공 시에만 의미 있음
-  const [bruteForce, abnormalTime, concurrentSession, abnormalCountry, impossibleTravel] = await Promise.all([
+  const [bruteForce, abnormalTime, concurrentSession, abnormalCountry, impossibleTravel, multiAccountDevice] = await Promise.all([
     detectBruteForce(ctx),
     ctx.success && ctx.userId ? detectAbnormalTime(ctx) : null,
     ctx.success && ctx.userId ? detectConcurrentSession(ctx.userId, ctx.ip, ctx.email, ctx.userAgent) : null,
     ctx.success && ctx.userId ? detectAbnormalCountry(ctx.userId, ctx.ip, ctx.email, ctx.userAgent) : null,
     ctx.success && ctx.userId ? detectImpossibleTravel(ctx.userId, ctx.ip, ctx.email, ctx.userAgent) : null,
+    // 1단계에서만 본다 — 2단계에서 다시 보면 같은 로그인이 계정 전환으로 한 번 더 집계된다.
+    ctx.success && ctx.userId && !ctx.isStep2
+      ? detectMultiAccountDevice(ctx).catch((err) => {
+          console.error('[Anomaly] 다계정 단말 탐지 오류:', err)
+          return null
+        })
+      : null,
   ])
 
-  for (const detected of [bruteForce, abnormalTime, concurrentSession, abnormalCountry, impossibleTravel]) {
+  for (const detected of [bruteForce, abnormalTime, concurrentSession, abnormalCountry, impossibleTravel, multiAccountDevice]) {
     if (!detected) continue
     result.anomalies.push(detected.type)
     result.reasons.push(detected.detail)
@@ -105,7 +118,7 @@ export async function analyzeLoginAttempt(ctx: LoginContext): Promise<AnomalyRes
     // userId가 없는 경우(로그인 실패) 이메일로 유저 조회 (계정 잠금 알림 보장)
     const notifyUserId = ctx.userId ?? (
       result.locked
-        ? await User.findOne({ where: { email: ctx.email } }).then(u => u?.id ?? null).catch(() => null)
+        ? ctx.accountId ?? await User.findOne({ where: { email: ctx.email } }).then(u => u?.id ?? null).catch(() => null)
         : null
     )
     if (notifyUserId) {
@@ -130,7 +143,7 @@ async function detectBruteForce(ctx: LoginContext) {
   const [failsByEmail, failsByIp] = await Promise.all([
     LoginAttempt.count({
       where: {
-        identifier: ctx.email,
+        identifier: ctx.loginKey ?? ctx.email,
         identifier_type: 'EMAIL',
         success: false,
         created_at: { [Op.gte]: windowStart },
@@ -154,7 +167,7 @@ async function detectBruteForce(ctx: LoginContext) {
   // ↓ 이메일 기준 초과 시 users 테이블에 실제 존재하는지 확인
   let action: AnomalyAction = ipExceeded ? 'BLOCK' : 'ALERT'
   if (emailExceeded) {
-    const userExists = await User.findOne({ where: { email: ctx.email } })
+    const userExists = ctx.accountId != null || (await User.findOne({ where: { email: ctx.email } })) !== null
     if (userExists) {
       action = 'LOCK'
     } else {
@@ -179,10 +192,10 @@ async function detectBruteForce(ctx: LoginContext) {
   // 있을 때만 잠그면 정작 공격 상황에서 잠금이 DB 에 남지 않아, 관리자 화면의
   // '잠긴 계정'에도 잡히지 않고 15분 창이 지나면 조용히 풀린다. 이메일로 조회해 잠근다.
   if (action === 'LOCK') {
-    const targetId = ctx.userId ?? (await User.findOne({ where: { email: ctx.email } }))?.id
+    const targetId = ctx.userId ?? ctx.accountId ?? (await User.findOne({ where: { email: ctx.email } }))?.id
     if (targetId) {
       await User.update({ is_locked: true }, { where: { id: targetId } })
-      console.warn(`[Anomaly] 계정 잠금: userId=${targetId}, email=${ctx.email}`)
+      console.warn(`[Anomaly] 계정 잠금: userId=${targetId}`)
     }
   }
 
@@ -538,7 +551,7 @@ export async function isAccountLocked(
 async function recordLoginAttempt(ctx: LoginContext) {
   await Promise.all([
     LoginAttempt.create({
-      identifier: ctx.email,
+      identifier: ctx.loginKey ?? ctx.email,
       identifier_type: 'EMAIL',
       ip: ctx.ip,
       success: ctx.success,
@@ -890,6 +903,265 @@ export async function recordTradeAnomaly(params: {
     }).catch(console.error)
   } catch (err) {
     console.error('[Anomaly] 거래 이상 기록 오류:', err)
+  }
+}
+
+// ─────────────────────────────────────────────
+// 단말 다계정 탐지 (1인 1계정 원칙)
+//
+// 증권 서비스는 1인 1계정이 원칙이다. 가입 시 이메일·휴대폰·지갑 중복은 검사하지만
+// 지갑은 무제한으로 새로 만들 수 있고, 휴대폰 인증도 문자 PIN 확인일 뿐 공인 본인확인이
+// 아니어서 가입 단계만으로는 한 사람의 다계정을 막을 수 없다. 그래서 "한 단말에서 몇 개의
+// 계정이 쓰이는가"를 관측한다.
+//
+// 위험 점수(riskEngine)에는 넣지 않는다. 위험 점수는 "이 로그인이 계정 주인의 것인가"를
+// 판단해 지갑 서명 재인증을 요구하는데, 다계정 사용자는 모든 계정의 지갑을 직접 갖고 있어
+// 재인증이 아무것도 막지 못한다. 대응은 기록·관리자 검토와 신규 가입 제한으로 한다.
+// 같은 단말에서 남의 계정들을 시도하는 탈취 공격도 이 신호에 잡히지만, 그 공격자는 피해자의
+// 지갑이 없어 기존 미신뢰 기기 지갑 서명 요구에서 이미 막힌다.
+// ─────────────────────────────────────────────
+export const MULTI_ACCOUNT_DEVICE_POLICY = {
+  // 로그인 관측 창 — 이 기간 안에 같은 단말에서 쓰인 다른 계정을 센다.
+  WINDOW_DAYS: 30,
+  // 이 시간 안에 같은 단말에서 다른 계정으로 바꿔 로그인하면 "계정 전환"으로 본다.
+  // 가족이 한 PC 를 나눠 쓰는 경우에도 10분 안에 번갈아 로그인하는 일은 드물다.
+  SWITCH_WINDOW_MINUTES: 10,
+  // 이미 활성 계정이 이 수 이상 연결된 단말에서는 신규 가입을 막는다.
+  // 1 이면 가족 공용 PC 의 두 번째 가입까지 막으므로 2 로 둔다(세 번째 계정부터 차단).
+  REGISTER_BLOCK_AT: 2,
+  // 같은 단말의 계정 전환 경보 반복 억제
+  SWITCH_ALERT_COOLDOWN_MINUTES: 30,
+} as const
+
+export interface DeviceLinkView {
+  userId: number
+  lastSeenAt: Date
+  active: boolean
+}
+
+export type DeviceLoginVerdict =
+  | { flagged: false }
+  | {
+      flagged: true
+      newAccount: boolean
+      rapidSwitch: boolean
+      otherAccounts: number[]
+      switchedFrom: number[]
+    }
+
+// 로그인 판정 — 이 단말에 이번 계정 외의 활성 계정이 창 안에 있고,
+// (a) 이번 계정이 이 단말에 처음 나타났거나 (b) 짧은 시간 안에 다른 계정에서 바꿔 들어왔으면 표시한다.
+// 이미 알려진 조합이 평소처럼 로그인하는 것은 다시 기록하지 않는다(가족 공용 PC 의 일상 사용).
+export function judgeDeviceLogin(p: {
+  userId: number
+  isNewLink: boolean
+  links: readonly DeviceLinkView[]
+  now: Date
+}): DeviceLoginVerdict {
+  const windowStart = p.now.getTime() - MULTI_ACCOUNT_DEVICE_POLICY.WINDOW_DAYS * 86_400_000
+  const switchStart = p.now.getTime() - MULTI_ACCOUNT_DEVICE_POLICY.SWITCH_WINDOW_MINUTES * 60_000
+  const others = p.links.filter(
+    (l) => l.active && l.userId !== p.userId && l.lastSeenAt.getTime() >= windowStart,
+  )
+  if (others.length === 0) return { flagged: false }
+  const switchedFrom = others.filter((l) => l.lastSeenAt.getTime() >= switchStart).map((l) => l.userId)
+  const rapidSwitch = switchedFrom.length > 0
+  if (!p.isNewLink && !rapidSwitch) return { flagged: false }
+  return {
+    flagged: true,
+    newAccount: p.isNewLink,
+    rapidSwitch,
+    otherAccounts: [...new Set(others.map((l) => l.userId))].sort((a, b) => a - b),
+    switchedFrom: [...new Set(switchedFrom)].sort((a, b) => a - b),
+  }
+}
+
+export type DeviceRegistrationVerdict =
+  | { allow: true; sharedWith: number[] }
+  | { allow: false; reason: 'NO_DEVICE_ID' | 'DEVICE_ACCOUNT_LIMIT'; activeAccounts: number[] }
+
+// 가입 판정 — 기간 제한 없이 이 단말에 연결된 활성(탈퇴하지 않은) 계정 수로 판정한다.
+// 기간을 두면 30일만 기다렸다가 다시 가입하는 방식으로 우회된다. 탈퇴한 계정은 세지 않는다 —
+// 탈퇴 후 재가입은 1인 1계정을 어기지 않는다.
+export function judgeDeviceRegistration(p: {
+  deviceFresh: boolean
+  links: readonly DeviceLinkView[]
+}): DeviceRegistrationVerdict {
+  if (p.deviceFresh) return { allow: false, reason: 'NO_DEVICE_ID', activeAccounts: [] }
+  const active = [...new Set(p.links.filter((l) => l.active).map((l) => l.userId))].sort((a, b) => a - b)
+  if (active.length >= MULTI_ACCOUNT_DEVICE_POLICY.REGISTER_BLOCK_AT) {
+    return { allow: false, reason: 'DEVICE_ACCOUNT_LIMIT', activeAccounts: active }
+  }
+  return { allow: true, sharedWith: active }
+}
+
+export class DeviceRegistrationBlockedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DeviceRegistrationBlockedError'
+  }
+}
+
+async function loadDeviceLinks(deviceHash: string): Promise<DeviceLinkView[]> {
+  const rows = await DeviceAccountLink.findAll({
+    where: { device_hash: deviceHash },
+    attributes: ['user_id', 'last_seen_at'],
+  })
+  if (rows.length === 0) return []
+  const ids = [...new Set(rows.map((r) => Number(r.user_id)))]
+  const users = await User.findAll({ where: { id: { [Op.in]: ids } }, attributes: ['id', 'status'] })
+  const activeIds = new Set(users.filter((u) => u.status !== 'withdrawn').map((u) => Number(u.id)))
+  return rows.map((r) => ({
+    userId: Number(r.user_id),
+    lastSeenAt: new Date(r.last_seen_at),
+    active: activeIds.has(Number(r.user_id)),
+  }))
+}
+
+// 연결을 갱신하고, 이번에 새로 생긴 연결인지 돌려준다.
+async function touchDeviceLink(deviceHash: string, userId: number, event: DeviceLinkEvent): Promise<boolean> {
+  const now = new Date()
+  const existing = await DeviceAccountLink.findOne({ where: { device_hash: deviceHash, user_id: userId } })
+  if (existing) {
+    await existing.update({ last_seen_at: now })
+    return false
+  }
+  try {
+    await DeviceAccountLink.create({
+      device_hash: deviceHash, user_id: userId, first_event: event, first_seen_at: now, last_seen_at: now,
+    })
+    return true
+  } catch (err) {
+    // 같은 단말·계정의 동시 요청이 먼저 만들었다 — 새 연결이 아니다.
+    if (err instanceof UniqueConstraintError) return false
+    throw err
+  }
+}
+
+const switchAlertCooldown = new Map<string, number>()
+
+// 로그인 1단계(비밀번호 검증) 성공 시 호출된다. 2단계가 아니라 1단계에서 보는 이유는,
+// 한 단말에서 여러 계정의 비밀번호를 맞혀 보는 시도(지갑 서명 전 단계)까지 관측하기 위해서다.
+export async function detectMultiAccountDevice(ctx: LoginContext) {
+  if (!ctx.userId || !ctx.deviceHash) return null
+  const links = await loadDeviceLinks(ctx.deviceHash)
+  const isNewLink = await touchDeviceLink(ctx.deviceHash, ctx.userId, 'LOGIN')
+  const v = judgeDeviceLogin({ userId: ctx.userId, isNewLink, links, now: new Date() })
+  if (!v.flagged) return null
+
+  if (!v.newAccount) {
+    const now = Date.now()
+    const last = switchAlertCooldown.get(ctx.deviceHash) ?? 0
+    if (now - last < MULTI_ACCOUNT_DEVICE_POLICY.SWITCH_ALERT_COOLDOWN_MINUTES * 60_000) return null
+    switchAlertCooldown.set(ctx.deviceHash, now)
+  }
+
+  const tags = [v.newAccount ? '신규 계정 연결' : null, v.rapidSwitch ? '계정 전환' : null].filter(Boolean).join('·')
+  const detail =
+    `[1인 1계정 · ${tags}] 이 단말에서 최근 ${MULTI_ACCOUNT_DEVICE_POLICY.WINDOW_DAYS}일간 사용된 다른 계정 ` +
+    `${v.otherAccounts.length}개 (user_id: ${v.otherAccounts.join(', ')})` +
+    (v.rapidSwitch
+      ? ` — ${MULTI_ACCOUNT_DEVICE_POLICY.SWITCH_WINDOW_MINUTES}분 안에 user_id ${v.switchedFrom.join(', ')} 에서 전환`
+      : '') +
+    ` / 단말 ${ctx.deviceHash.slice(0, 12)}`
+
+  await logAnomaly({
+    userId: ctx.userId, email: ctx.email, ip: ctx.ip, userAgent: ctx.userAgent,
+    type: 'MULTI_ACCOUNT_DEVICE', action: 'ALERT', detail,
+  })
+  return {
+    type: 'MULTI_ACCOUNT_DEVICE' as AnomalyType,
+    action: 'ALERT' as AnomalyAction,
+    detail,
+    userMessage: '이 기기에서 다른 계정의 로그인 이력이 확인되었습니다. 본인이 사용하지 않은 기기라면 비밀번호를 변경해주세요.',
+  }
+}
+
+// 회원가입 직전 — 단말 한도를 넘으면 가입을 막고 기록한다.
+export async function assertRegistrationDeviceAllowed(p: {
+  deviceHash?: string
+  deviceFresh?: boolean
+  email: string
+  ip: string
+  userAgent?: string
+}): Promise<{ sharedWith: number[] }> {
+  if (!p.deviceHash) return { sharedWith: [] }
+  const links = await loadDeviceLinks(p.deviceHash)
+  const v = judgeDeviceRegistration({ deviceFresh: p.deviceFresh === true, links })
+  if (v.allow) return { sharedWith: v.sharedWith }
+
+  const detail =
+    v.reason === 'NO_DEVICE_ID'
+      ? '[1인 1계정 · 식별자 없는 가입] 단말 식별 쿠키 없이 가입 요청 — 쿠키를 버리는 자동화 가입 의심'
+      : `[1인 1계정 · 가입 차단] 이 단말에 이미 활성 계정 ${v.activeAccounts.length}개 ` +
+        `(user_id: ${v.activeAccounts.join(', ')}) / 단말 ${p.deviceHash.slice(0, 12)}`
+  await logAnomaly({
+    email: p.email, ip: p.ip, userAgent: p.userAgent,
+    type: 'MULTI_ACCOUNT_DEVICE', action: 'BLOCK', detail,
+  }).catch((err) => console.error('[Anomaly] 다계정 가입 차단 기록 오류:', err))
+
+  throw new DeviceRegistrationBlockedError(
+    v.reason === 'NO_DEVICE_ID'
+      ? '브라우저 쿠키가 차단되어 있어 가입할 수 없습니다. 쿠키를 허용한 뒤 새로고침하여 다시 시도해주세요'
+      : '1인 1계정 원칙에 따라 이 기기에서는 더 이상 새 계정을 만들 수 없습니다',
+  )
+}
+
+// 회원가입 직후 — 연결을 남기고, 다른 활성 계정이 있던 단말이면 기록한다.
+export async function linkRegisteredAccount(p: {
+  deviceHash?: string
+  userId: number
+  email: string
+  ip: string
+  userAgent?: string
+  sharedWith: number[]
+}): Promise<void> {
+  if (!p.deviceHash) return
+  try {
+    await touchDeviceLink(p.deviceHash, p.userId, 'REGISTER')
+    if (p.sharedWith.length === 0) return
+    await logAnomaly({
+      userId: p.userId, email: p.email, ip: p.ip, userAgent: p.userAgent,
+      type: 'MULTI_ACCOUNT_DEVICE', action: 'ALERT',
+      detail:
+        `[1인 1계정 · 공용 단말 가입] 활성 계정 ${p.sharedWith.length}개(user_id: ${p.sharedWith.join(', ')})가 ` +
+        `있는 단말에서 신규 가입 / 단말 ${p.deviceHash.slice(0, 12)}`,
+    })
+  } catch (err) {
+    console.error('[Anomaly] 가입 단말 연결 기록 오류:', err)
+  }
+}
+
+// ─────────────────────────────────────────────
+// 체결 장부 위·변조 (ledgerAnchorService.verifyDay 에서 호출)
+//
+// 고정된 일별 장부 루트와 현재 주문 기록으로 다시 계산한 루트가 다르면, 체결 기록이 사후에
+// 바뀐 것이다. 특정 사용자의 행위가 아니라 데이터베이스 쓰기 권한의 오·남용이므로 계정 소유자가
+// 아니라 관리자에게 알린다. 같은 사유의 반복 메일은 쿨다운으로 억제한다.
+// ─────────────────────────────────────────────
+export async function recordLedgerTampering(detail: string): Promise<void> {
+  try {
+    await logAnomaly({
+      email: '',
+      ip: 'system',
+      type: 'LEDGER_TAMPERING',
+      action: 'ALERT',
+      detail,
+    })
+    const now = Date.now()
+    const key = `LEDGER_TAMPERING:${detail.slice(0, 40)}`
+    if (now - (adminAlertCooldown.get(key) ?? 0) <= EMAIL_COOLDOWN_MS) return
+    adminAlertCooldown.set(key, now)
+    const admin = await User.findOne({ where: { role: 'admin' } })
+    if (!admin) return
+    await sendAnomalyAlertEmail(admin.email, {
+      reasons: [`모의투자 체결 장부 위·변조 탐지: ${detail}`],
+      ip: 'system',
+      location: '서버 정기 검증',
+      userAgent: 'ledgerAnchorScheduler',
+    }).catch(console.error)
+  } catch (err) {
+    console.error('[Anomaly] 장부 위·변조 기록 오류:', err)
   }
 }
 

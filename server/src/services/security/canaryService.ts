@@ -48,9 +48,11 @@ export const hashCanaryEmail = (email: string): string =>
 /** DB 조회 결과만으로 판정하는 순수 함수 — 검증 스크립트가 DB 없이 전 분기를 시험한다. */
 export function evaluateCanaryBinding(
   binding: CanaryBinding,
-  row: { id: number; email: string } | null,
+  row: { id: number; email: string | null } | null,
 ): CanaryBindingState {
   if (!row) return 'MISSING'
+  // 이메일이 없는 계정(휴대폰 가입)은 미끼 계정일 수 없다
+  if (!row.email) return 'MISMATCH'
   return hashCanaryEmail(row.email) === binding.emailSha256 ? 'VERIFIED' : 'MISMATCH'
 }
 

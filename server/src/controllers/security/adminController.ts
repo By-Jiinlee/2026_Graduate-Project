@@ -1,17 +1,22 @@
 import { Request, Response } from 'express'
-import { Op, fn, col, literal } from 'sequelize'
+import { Op, fn, col, literal, QueryTypes } from 'sequelize'
 import AnomalyLog from '../../models/auth/AnomalyLog'
 import LoginAttempt from '../../models/auth/LoginAttempt'
 import InferenceLog from '../../models/ai/InferenceLog'
 import User from '../../models/user/User'
 import { blockedIPs } from '../../middleware/security/ipBlockMiddleware'
+import sequelize from '../../config/database'
+import LedgerAnchor from '../../models/trade/LedgerAnchor'
+import { accountDisplay, accountLoginKey } from '../../utils/loginIdentifier'
+import { isLedgerOnChain, isValidDayKey, verifyDay } from '../../services/web3/ledgerAnchorService'
 
 // 대시보드 요약 통계
 export async function getStats(req: Request, res: Response): Promise<void> {
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
 
-  const [total, today, locked, honeypotHits, integrityViolations, tradeAnomalies, tradeBlocked] =
+  const [total, today, locked, honeypotHits, integrityViolations, tradeAnomalies, tradeBlocked,
+    multiAccountDevices, multiAccountAlerts, multiAccountBlocked, ledgerAnchored, ledgerTampering] =
     await Promise.all([
       AnomalyLog.count(),
       AnomalyLog.count({ where: { created_at: { [Op.gte]: todayStart } } }),
@@ -26,11 +31,29 @@ export async function getStats(req: Request, res: Response): Promise<void> {
       AnomalyLog.count({
         where: { anomaly_type: 'ABNORMAL_TRADE_AMOUNT', action: 'BLOCK' },
       }).catch(() => 0),
+      // 1인 1계정 — 탈퇴하지 않은 계정이 2개 이상 연결된 단말 수
+      sequelize
+        .query<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM (
+             SELECT d.device_hash FROM device_account_links d
+               JOIN users u ON u.id = d.user_id AND u.status <> 'withdrawn'
+              GROUP BY d.device_hash HAVING COUNT(DISTINCT d.user_id) >= 2
+           ) t`,
+          { type: QueryTypes.SELECT },
+        )
+        .then((rows) => Number(rows[0]?.n ?? 0))
+        .catch(() => 0),
+      AnomalyLog.count({ where: { anomaly_type: 'MULTI_ACCOUNT_DEVICE', action: 'ALERT' } }).catch(() => 0),
+      AnomalyLog.count({ where: { anomaly_type: 'MULTI_ACCOUNT_DEVICE', action: 'BLOCK' } }).catch(() => 0),
+      LedgerAnchor.count().catch(() => 0),
+      AnomalyLog.count({ where: { anomaly_type: 'LEDGER_TAMPERING' } }).catch(() => 0),
     ])
 
   res.json({
     total, today, locked, blockedIPs: blockedIPs.size,
     honeypotHits, integrityViolations, tradeAnomalies, tradeBlocked,
+    multiAccountDevices, multiAccountAlerts, multiAccountBlocked,
+    ledgerAnchored, ledgerTampering, ledgerOnChain: isLedgerOnChain(),
   })
 }
 
@@ -215,7 +238,8 @@ export async function unlockAccount(req: Request, res: Response): Promise<void> 
   // 다음 로그인 시도에서 같은 기록이 다시 임계를 넘겨 즉시 재잠금된다(해제가 무효).
   // 따라서 해제 시점에 해당 계정의 미처리 실패 기록을 함께 정리한다.
   const clearedAttempts = await LoginAttempt.destroy({
-    where: { identifier: user.email, identifier_type: 'EMAIL', success: false },
+    // 잠금 집계는 계정 기준 키로 쌓인다(이메일 또는 휴대폰 로그인 공용) — 같은 키로 지워야 해제 직후 재잠금이 없다
+    where: { identifier: accountLoginKey(user), identifier_type: 'EMAIL', success: false },
   })
 
   // 해당 유저의 미해결 anomaly_logs resolved 처리
@@ -225,7 +249,7 @@ export async function unlockAccount(req: Request, res: Response): Promise<void> 
   )
 
   res.json({
-    message: `${user.email} 계정 잠금 해제 완료`,
+    message: `${accountDisplay(user)} 계정 잠금 해제 완료`,
     clearedAttempts,
   })
 }
@@ -254,4 +278,28 @@ export async function unblockIP(req: Request, res: Response): Promise<void> {
 
   console.log(`[Admin] IP 차단 해제: ${ip} (실패 기록 ${clearedAttempts}건 정리)`)
   res.json({ message: `${ip} 차단 해제 완료`, clearedAttempts })
+}
+
+// 체결 장부 고정 목록 — 잎 목록은 크기가 커서 내려주지 않는다
+export async function getLedgerAnchors(req: Request, res: Response): Promise<void> {
+  const rows = await LedgerAnchor.findAll({
+    attributes: ['anchor_date', 'merkle_root', 'leaf_count', 'status', 'tx_hash', 'last_verify_result', 'verified_at', 'created_at'],
+    order: [['anchor_date', 'DESC']],
+    limit: 30,
+  })
+  res.json({ onChain: isLedgerOnChain(), anchors: rows })
+}
+
+// 특정 날짜 장부 즉시 재검증
+export async function verifyLedger(req: Request, res: Response): Promise<void> {
+  const day = Number(req.params.day)
+  if (!isValidDayKey(day)) {
+    res.status(400).json({ message: '날짜는 yyyymmdd 형식이어야 합니다' })
+    return
+  }
+  try {
+    res.json(await verifyDay(day))
+  } catch (err: any) {
+    res.status(502).json({ message: `장부 검증 실패: ${err?.message ?? err}` })
+  }
 }

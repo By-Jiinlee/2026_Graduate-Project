@@ -17,5 +17,7 @@ router.get('/locked-accounts', adminController.getLockedAccounts)
 router.patch('/users/:userId/unlock', adminController.unlockAccount)
 router.get('/blocked-ips', adminController.getBlockedIPs)
 router.delete('/blocked-ips/:ip', adminController.unblockIP)
+router.get('/ledger', adminController.getLedgerAnchors)
+router.post('/ledger/:day/verify', adminController.verifyLedger)
 
 export default router

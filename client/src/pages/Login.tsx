@@ -33,7 +33,8 @@ export default function Login() {
           'X-Device-Fingerprint': deviceFingerprint
         },
         credentials: 'include',
-        body: JSON.stringify({ email, password, honeypot, behaviorData }), // body에 behaviorData를 추가
+        // 로그인 아이디는 이메일 또는 휴대폰 번호(휴대폰으로 가입한 계정)
+        body: JSON.stringify({ loginId: email.trim(), password, honeypot, behaviorData }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.message)
@@ -224,8 +225,8 @@ export default function Login() {
               />
               
               <div>
-                <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>이메일</label>
-                <input type="email" placeholder="이메일을 입력하세요" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+                <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>이메일 또는 휴대폰 번호</label>
+                <input type="text" inputMode="email" autoComplete="username" placeholder="이메일 또는 휴대폰 번호('-' 없이)" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
               </div>
               <div>
                 <label style={{ fontSize: '13px', color: '#555', fontWeight: '600', display: 'block', marginBottom: '6px' }}>비밀번호</label>

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import { parseLoginIdentifier } from '../../utils/loginIdentifier'
 
 const isValidEmail = (email: string): boolean => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -56,7 +57,8 @@ export const validateRegister = (
     age_agreed,
   } = req.body
 
-  if (!email || !password || !name || !walletAddress || !walletSignature) {
+  // 이메일은 휴대폰으로 가입하면 없어도 된다(로그인 아이디가 휴대폰 번호). 둘 중 하나는 있어야 한다.
+  if (!password || !name || !walletAddress || !walletSignature || (!email && !phone)) {
     return res.status(400).json({ message: '필수 항목을 모두 입력해주세요' })
   }
   if (!terms_agreed) {
@@ -74,7 +76,7 @@ export const validateRegister = (
     return res.status(400).json({ message: '만 14세 이상 확인에 동의해주세요' })
   }
 
-  if (!isValidEmail(email)) {
+  if (email && !isValidEmail(email)) {
     return res.status(400).json({ message: '이메일 형식이 올바르지 않습니다' })
   }
   if (!isValidPassword(password)) {
@@ -100,10 +102,10 @@ export const validateRegister = (
   if (!isValidSignature(walletSignature)) {
     return res.status(400).json({ message: '올바른 지갑 서명값이 아닙니다' })
   }
-  if (hasXss(email, name)) {
+  if (hasXss(email ?? '', name)) {
     return res.status(400).json({ message: '올바르지 않은 입력값입니다' })
   }
-  if (hasSqlInjection(email, password, name)) {
+  if (hasSqlInjection(email ?? '', password, name)) {
     return res.status(400).json({ message: '올바르지 않은 입력값입니다' })
   }
 
@@ -117,20 +119,21 @@ export const validateLoginStep1 = (
   res: Response,
   next: NextFunction,
 ) => {
-  const { email, password } = req.body
+  // 로그인 아이디는 이메일 또는 휴대폰 번호. 구버전 클라이언트는 email 필드로 보낸다.
+  const loginId = req.body.loginId ?? req.body.email
+  const { password } = req.body
 
-  if (!email || !password) {
-    return res.status(400).json({ message: '이메일과 비밀번호를 입력해주세요' })
+  if (!loginId || !password || typeof loginId !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ message: '아이디(이메일 또는 휴대폰 번호)와 비밀번호를 입력해주세요' })
   }
-  if (!isValidEmail(email)) {
-    return res.status(400).json({ message: '이메일 형식이 올바르지 않습니다' })
-  }
-  if (hasSqlInjection(email, password)) {
+  if (hasSqlInjection(loginId, password) || hasXss(loginId)) {
     return res.status(400).json({ message: '올바르지 않은 입력값입니다' })
   }
-  if (hasXss(email)) {
-    return res.status(400).json({ message: '올바르지 않은 입력값입니다' })
+  const identifier = parseLoginIdentifier(loginId)
+  if (!identifier) {
+    return res.status(400).json({ message: '이메일 또는 휴대폰 번호 형식이 올바르지 않습니다' })
   }
+  res.locals.loginIdentifier = identifier
 
   next()
 }

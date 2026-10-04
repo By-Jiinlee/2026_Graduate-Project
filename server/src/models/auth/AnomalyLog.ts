@@ -3,7 +3,7 @@ import sequelize from '../../config/database'
 
 // DB 마이그레이션: src/database/migrations/20260730_anomaly_type_hmac.sql, 20260730_inference_logs.sql,
 //                  20260801_anomaly_type_trade.sql, 20260826_anomaly_type_canary.sql,
-//                  20260929_anomaly_type_bot_behavior.sql
+//                  20260929_anomaly_type_bot_behavior.sql, 20261001_wallet_nonce_device_links.sql, 20261001_ledger_anchor.sql
 export type AnomalyType =
   | 'BRUTE_FORCE'
   | 'ABNORMAL_TIME'
@@ -30,6 +30,8 @@ export type AnomalyType =
   | 'CANARY_ACCESS'            // 기만 기술 — 미끼(카나리) 계좌 진입점 접근
   | 'BOT_BEHAVIOR_MOUSE'       // 로그인 폼 체류 중 마우스 이동 0회 (관측 신호)
   | 'BOT_BEHAVIOR_TYPING'      // 로그인 폼 평균 타자 간격 50ms 미만 (관측 신호)
+  | 'MULTI_ACCOUNT_DEVICE'     // 1인 1계정 — 한 단말에서 여러 계정 사용·전환
+  | 'LEDGER_TAMPERING'         // 체인에 고정된 일별 체결 장부와 현재 주문 기록 불일치
 export type AnomalyAction = 'ALERT' | 'BLOCK' | 'LOCK'
 
 interface AnomalyLogAttributes {
@@ -98,6 +100,8 @@ AnomalyLog.init(
         'CANARY_ACCESS',
         'BOT_BEHAVIOR_MOUSE',
         'BOT_BEHAVIOR_TYPING',
+        'MULTI_ACCOUNT_DEVICE',
+        'LEDGER_TAMPERING',
       ),
       allowNull: false,
     },

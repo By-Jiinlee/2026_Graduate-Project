@@ -141,15 +141,16 @@ export interface TestSession {
 export async function loginAsTestUser(
   email: string,
   password: string,
-  requirePhoneVerified = true,
+  // 모의투자 거래 라우트는 이메일·휴대폰 중 하나 인증이면 도달한다(verificationTierMiddleware)
+  requireVerified = true,
   // 로그인 레이트 리미터는 IP 단위(15회/15분)라 고정 IP 로 반복 실행하면 스크립트 자신이
   // 막힌다. 반복 실행하는 검증에서는 실행마다 다른 위조 IP 를 넘긴다.
   loginIp: string = IP.LOGIN,
 ): Promise<TestSession> {
   const user = await User.findOne({ where: { email } })
   if (!user) die(`테스트 계정을 찾을 수 없습니다: ${email}`)
-  if (requirePhoneVerified && !user.is_phone_verified) {
-    die('테스트 계정의 휴대폰 인증이 완료되지 않아 거래 라우트에 도달할 수 없습니다.')
+  if (requireVerified && !user.is_email_verified && !user.is_phone_verified) {
+    die('테스트 계정에 이메일·휴대폰 인증 기록이 없어 모의투자 거래 라우트에 도달할 수 없습니다.')
   }
 
   const deviceToken = await registerTrustedDevice(user.id, UA, loginIp)
@@ -162,10 +163,15 @@ export async function loginAsTestUser(
   if (step1.status !== 200) die(`1단계 로그인 실패: ${step1.status} ${JSON.stringify(step1.data)}`)
   if (!step1.data.isTrustedDevice) die('신뢰 기기로 인정되지 않았습니다(지갑 서명 필요 상태).')
 
+  // 2단계는 1단계가 내려준 챌린지 쿠키에서만 신원을 꺼낸다(브라우저는 자동으로 돌려보낸다).
+  const step1Jar = parseCookies(step1.headers['set-cookie'] as string[] | undefined)
+  if (!step1Jar.loginChallenge) die('1단계 응답에 로그인 챌린지 쿠키가 없습니다.')
+  const step2Cookie = [deviceCookie, ...Object.entries(step1Jar).map(([k, v]) => `${k}=${v}`)].join('; ')
+
   const step2 = await post(
     '/api/auth/login/step2',
     JSON.stringify({ userId: step1.data.userId, walletAddress: step1.data.walletAddress }),
-    { ip: loginIp, cookie: deviceCookie },
+    { ip: loginIp, cookie: step2Cookie },
   )
   if (step2.status !== 200) die(`2단계 로그인 실패: ${step2.status} ${JSON.stringify(step2.data)}`)
 

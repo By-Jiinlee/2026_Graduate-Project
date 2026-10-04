@@ -10,8 +10,30 @@ import {
   DEVICE_COOKIE_NAME,
 } from '../../services/auth/trustedDeviceService'
 import { assessRisk, collectRiskSignals, decideAuthRequirement } from '../../services/auth/riskEngine'
-import { recordAdaptiveDecision } from '../../services/auth/anomalyService'
-import { getTradeNonce as fetchTradeNonce } from '../../services/web3/contractService'
+import {
+  assertRegistrationDeviceAllowed,
+  DeviceRegistrationBlockedError,
+  linkRegisteredAccount,
+  logAnomaly,
+  recordAdaptiveDecision,
+} from '../../services/auth/anomalyService'
+import { getClientIp } from '../../utils/getClientIp'
+import { accountDisplay, accountLoginKey, identifierDisplay, identifierLoginKey, maskPhone } from '../../utils/loginIdentifier'
+import {
+  getUsableAuthNonce,
+  getUsableTradeNonce,
+  SignatureReplayError,
+  verifySignature as verifyWalletSignature,
+} from '../../services/web3/contractService'
+import {
+  consumeLoginChallenge,
+  describeBodyMismatch,
+  issueLoginChallenge,
+  LOGIN_CHALLENGE_COOKIE,
+  LoginChallengeError,
+  readLoginChallenge,
+  type LoginChallenge,
+} from '../../services/auth/loginChallengeService'
 import { issueSessionSecret, revokeSessionSecret } from '../../services/auth/hmacService'
 import Wallet from '../../models/user/Wallet'
 import User from '../../models/user/User'
@@ -111,6 +133,19 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ message: '지갑 서명이 필요합니다' })
     }
 
+    // 1인 1계정 — 이미 활성 계정이 한도만큼 쓰인 단말이거나 식별 쿠키를 버리는 클라이언트면 가입을 막는다.
+    const ip = getClientIp(req)
+    const userAgent = req.headers['user-agent']
+    // 이상 로그 표시값 — 휴대폰 가입이면 가린 번호
+    const signupDisplay = email || (phone ? maskPhone(String(phone)) : '')
+    const { sharedWith } = await assertRegistrationDeviceAllowed({
+      deviceHash: res.locals.deviceHash,
+      deviceFresh: res.locals.deviceFresh,
+      email: signupDisplay,
+      ip,
+      userAgent,
+    })
+
     const user = await authService.register(
       email,
       password,
@@ -125,11 +160,23 @@ export const register = async (req: Request, res: Response) => {
       marketing_agreed ?? false,
     )
 
+    await linkRegisteredAccount({
+      deviceHash: res.locals.deviceHash,
+      userId: user.id,
+      email: signupDisplay,
+      ip,
+      userAgent,
+      sharedWith,
+    })
+
     return res.status(201).json({
       message: '회원가입이 완료되었습니다',
       userId: user.id,
     })
   } catch (error: any) {
+    if (error instanceof DeviceRegistrationBlockedError) {
+      return res.status(403).json({ message: error.message, code: 'DEVICE_ACCOUNT_LIMIT' })
+    }
     console.error('register error:', error.message, error.errors)
     return res.status(400).json({ message: error.message })
   }
@@ -139,8 +186,9 @@ export const register = async (req: Request, res: Response) => {
 
 // 1단계: 이메일 + 비밀번호 검증 → nonce 반환
 export const loginStep1 = async (req: Request, res: Response, next: NextFunction) => {
+  let account: authService.LoginAccount | undefined
   try {
-    const { email, password, honeypot, behaviorData } = req.body
+    const { password, honeypot, behaviorData } = req.body
 
     // 기만 기술: 사람이 아닌 봇(Bot)이 숨김 필드를 채운 경우 즉시 차단
     if (honeypot && honeypot.length > 0) {
@@ -149,7 +197,8 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
         message: '비정상적인 접근이 감지되었습니다.'
       })
     }
-    const result = await authService.loginStep1(email, password)
+    account = await authService.resolveLoginAccount(res.locals.loginIdentifier)
+    const result = await authService.loginStep1(account, password)
     
     // 신뢰 기기 확인
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
@@ -162,12 +211,17 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
 
     // 이상탐지 미들웨어를 위한 locals 설정
     res.locals.loginSuccess = true
-    res.locals.loginEmail = email
+    res.locals.loginEmail = account.display
+    res.locals.loginKey = account.loginKey
+    res.locals.loginAccountId = result.userId
     res.locals.loginUserId = result.userId
     // 적응형 인증(H) — 위험 점수 판정은 탐지 결과가 나온 뒤라야 하므로
     // analyzeAfterLogin 에서 수행한다. 여기서는 입력만 넘긴다.
     res.locals.isTrustedDevice = isTrustedDevice
     res.locals.behaviorData = behaviorData;
+    // 2단계의 유일한 신원 근거. 쿠키는 analyzeAfterLogin 이 차단 판정을 통과시킨 뒤에만 내려준다 —
+    // 여기서 바로 쓰면 무차별 대입 차단(403) 응답에도 쿠키가 실려 2단계로 넘어갈 수 있다.
+    res.locals.loginChallenge = issueLoginChallenge(result.userId, result.walletAddress)
 
     res.locals.responseData = {
       message: '1단계 인증 성공. 지갑 서명을 진행해주세요',
@@ -189,9 +243,13 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
     //   requireWalletSign: !isTrustedDevice,
     // })
   } catch (error: any) {
-    // ↓ 추가: 실패도 이상탐지 미들웨어에 전달
+    // ↓ 추가: 실패도 이상탐지 미들웨어에 전달 — 계정이 있으면 계정 기준으로 집계(이메일·휴대폰 공용)
     res.locals.loginSuccess = false
-    res.locals.loginEmail = req.body.email
+    // 계정 해석 자체가 실패했어도 입력값을 그대로 남기지 않는다(휴대폰 번호는 가린 값·해시 키)
+    const id = res.locals.loginIdentifier
+    res.locals.loginEmail = account?.display ?? (id ? identifierDisplay(id) : '')
+    res.locals.loginKey = account?.loginKey ?? (id ? identifierLoginKey(id) : undefined)
+    res.locals.loginAccountId = account?.user?.id
     res.locals.responseData = { message: error.message }
     res.locals.responseStatus = 400
     return next()
@@ -201,15 +259,37 @@ export const loginStep1 = async (req: Request, res: Response, next: NextFunction
 
 // 2단계: 지갑 서명 검증 → JWT 발급
 export const loginStep2 = async (req: Request, res: Response, next: NextFunction) => {
+  const ip =
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+    req.socket.remoteAddress ||
+    'unknown'
+  const userAgent = req.headers['user-agent'] || 'unknown'
+  let challenge: LoginChallenge | undefined
+
   try {
-    const { userId, walletAddress, signature, rememberDevice } = req.body
+    const { signature, rememberDevice } = req.body
 
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
-      req.socket.remoteAddress ||
-      'unknown'
-
-    const userAgent = req.headers['user-agent'] || 'unknown'
+    // 신원은 1단계가 발급한 챌린지에서만 꺼낸다. 본문의 userId·walletAddress 는 비교 대상일 뿐이다.
+    challenge = readLoginChallenge(req.cookies?.[LOGIN_CHALLENGE_COOKIE])
+    const mismatch = describeBodyMismatch(challenge, req.body)
+    if (mismatch) {
+      // 정상 클라이언트는 1단계 응답을 그대로 돌려보내므로 불일치가 생기지 않는다.
+      // 챌린지 소유자(=1단계를 통과한 계정)를 기록하고 챌린지를 폐기해 재사용을 막는다.
+      consumeLoginChallenge(challenge)
+      res.clearCookie(LOGIN_CHALLENGE_COOKIE)
+      const owner = await User.findByPk(challenge.userId, { attributes: ['email'] }).catch(() => null)
+      void logAnomaly({
+        userId: challenge.userId,
+        email: owner?.email ?? '',
+        ip,
+        userAgent,
+        type: 'REQUEST_TAMPERING',
+        action: 'BLOCK',
+        detail: `[로그인 2단계] 1단계와 다른 신원 지정 — ${mismatch}`,
+      }).catch((err) => console.error('[loginStep2] 신원 불일치 기록 실패:', err))
+      throw new LoginChallengeError('로그인 정보가 일치하지 않습니다. 처음부터 다시 로그인해주세요')
+    }
+    const { userId, walletAddress } = challenge
 
     // 지갑 서명 생략 여부는 클라이언트 요청값(skipSignature)을 신뢰하지 않고 서버가 직접 재검증한다.
     // 요청 바디의 플래그를 그대로 쓰면 비밀번호만 아는 공격자가 서명 단계를 우회할 수 있다.
@@ -293,6 +373,8 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
       userAgent,
       isTrustedDevice,
     )
+    consumeLoginChallenge(challenge)
+    res.clearCookie(LOGIN_CHALLENGE_COOKIE)
 
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
@@ -328,7 +410,9 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
 
     // 이상탐지 미들웨어를 위한 locals 설정
     res.locals.loginSuccess = true
-    res.locals.loginEmail = user.email
+    res.locals.loginEmail = accountDisplay(user)
+    res.locals.loginKey = accountLoginKey(user)
+    res.locals.loginAccountId = user.id
     res.locals.loginUserId = user.id
 
     // HMAC 요청서명용 세션 서명키 발급 — 클라이언트가 거래 요청 서명에 사용
@@ -353,9 +437,24 @@ export const loginStep2 = async (req: Request, res: Response, next: NextFunction
     res.locals.isStep2 = true
     return next() // <- analyzeAfterLogin 으로 넘김
   } catch (error: any) {
+    if (error instanceof SignatureReplayError && challenge) {
+      // 블록 포함 전에 같은 서명이 다시 제출됐다 — 가로챈 서명의 재전송이다.
+      void logAnomaly({
+        userId: challenge.userId,
+        email: '',
+        ip,
+        userAgent,
+        type: 'REPLAY_ATTACK',
+        action: 'BLOCK',
+        detail: `[로그인 2단계] 이미 소비된 지갑 서명 재제출 (지갑 ${challenge.walletAddress})`,
+      }).catch((err) => console.error('[loginStep2] 서명 재사용 기록 실패:', err))
+    }
     res.locals.loginSuccess = false
     res.locals.loginEmail = req.body.email ?? ''
-    res.locals.responseData = { message: error.message }
+    res.locals.responseData = {
+      message: error.message,
+      ...(error instanceof LoginChallengeError ? { code: 'LOGIN_CHALLENGE_REQUIRED' } : {}),
+    }
     res.locals.responseStatus = 400
     res.locals.isStep2 = true
     return next()
@@ -456,7 +555,7 @@ export const getMyInfo = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id
     const user = await User.findByPk(userId, {
-      attributes: ['id', 'email', 'name', 'nickname', 'phone', 'is_phone_verified', 'role', 'status', 'created_at', 'email_changed_at'],
+      attributes: ['id', 'email', 'name', 'nickname', 'phone', 'is_email_verified', 'is_phone_verified', 'role', 'status', 'created_at', 'email_changed_at'],
     })
     return res.status(200).json(user)
   } catch (error: any) {
@@ -519,8 +618,7 @@ export const getPasswordNonce = async (req: Request, res: Response) => {
     const userId = (req as any).user.id
     const wallet = await Wallet.findOne({ where: { user_id: userId } })
     if (!wallet) return res.status(404).json({ message: '등록된 지갑이 없습니다' })
-    const { getAuthNonce } = await import('../../services/web3/contractService')
-    const nonce = await getAuthNonce(wallet.address)
+    const nonce = await getUsableAuthNonce(wallet.address)
     return res.status(200).json({ walletAddress: wallet.address, nonce: nonce.toString() })
   } catch (error: any) {
     return res.status(500).json({ message: error.message })
@@ -534,16 +632,25 @@ export const changePassword = async (req: Request, res: Response) => {
     if (!currentPassword || !newPassword) return res.status(400).json({ message: '비밀번호를 입력해주세요' })
     if (!PW_REGEX.test(newPassword)) return res.status(400).json({ message: '새 비밀번호는 영문, 숫자, 특수문자(!@#$%^&*)를 각 1개 이상 포함한 8자 이상이어야 합니다' })
 
-    // MetaMask 서명 검증 (지갑이 있는 경우 필수)
-    if (walletAddress && signature) {
-      const { getAuthNonce, verifySignature } = await import('../../services/web3/contractService')
-      const nonce = await getAuthNonce(walletAddress)
-      const valid = await verifySignature(walletAddress, nonce, signature)
-      if (!valid) return res.status(400).json({ message: 'MetaMask 서명 검증에 실패했습니다' })
-    } else {
-      // 지갑이 등록되어 있으면 서명 필수
-      const wallet = await Wallet.findOne({ where: { user_id: userId } })
-      if (wallet) return res.status(400).json({ message: 'MetaMask 2차 인증이 필요합니다' })
+    // 서명을 검증할 지갑은 이 계정에 등록된 지갑이다. 이전에는 본문의 walletAddress 로 검증해
+    // 세션을 탈취한 공격자가 자기 지갑 서명으로 2차 인증을 통과할 수 있었다.
+    //
+    // 서명을 현재 비밀번호보다 먼저 검증한다. 순서를 바꾸면 개인키 없는 세션 탈취자가 이
+    // 경로로 현재 비밀번호를 무제한 대입할 수 있다. 위조 서명은 사전 실행에서 걸러져 가스를 쓰지 않는다.
+    const wallet = await Wallet.findOne({ where: { user_id: userId, is_primary: true } })
+    if (wallet) {
+      if (!signature) return res.status(400).json({ message: 'MetaMask 2차 인증이 필요합니다' })
+      if (typeof walletAddress === 'string' && walletAddress.toLowerCase() !== wallet.address.toLowerCase()) {
+        return res.status(400).json({ message: '이 계정에 등록된 지갑으로 서명해주세요' })
+      }
+      const { getAuthNonce } = await import('../../services/web3/contractService')
+      const nonce = await getAuthNonce(wallet.address)
+      try {
+        await verifyWalletSignature(wallet.address, nonce, signature)
+      } catch (err: any) {
+        // 서명 불일치·재사용은 요청 오류다. 서버 오류(500)로 내보내면 클라이언트가 재시도 대상으로 오인한다.
+        return res.status(400).json({ message: err?.message ?? 'MetaMask 서명 검증에 실패했습니다' })
+      }
     }
 
     const user = await User.findByPk(userId)
@@ -643,7 +750,7 @@ export const getTradeNonce = async (req: Request, res: Response) => {
     const wallet = await Wallet.findOne({ where: { user_id: userId } })
     if (!wallet) return res.status(404).json({ message: '지갑이 없습니다' })
 
-    const nonce = await fetchTradeNonce(wallet.address)
+    const nonce = await getUsableTradeNonce(wallet.address)
     res.json({ nonce: nonce.toString() })
   } catch (error: any) {
     res.status(500).json({ message: error.message })

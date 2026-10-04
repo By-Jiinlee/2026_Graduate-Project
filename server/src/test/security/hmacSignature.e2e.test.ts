@@ -11,7 +11,7 @@ import { IP, Res, arg, die, hasFlag, loginAsTestUser, post } from './testClient'
 //
 // hmacSignature.test.ts 는 검증 함수를 직접 호출하는 단위 검증이다. 이 스크립트는
 // "실제 서비스 경로에서 차단되는가"를 확인한다. 즉 HTTP → ipBlockMiddleware →
-// isAuthenticated(JWT) → requirePhoneVerified → hmacMiddleware → 거래 컨트롤러
+// isAuthenticated(JWT) → requireAnyVerified(모의투자) → hmacMiddleware → 거래 컨트롤러
 // 전 구간을 통과시키고, 탐지 결과가 DB(anomaly_logs)에 남는지까지 교차 확인한다.
 //
 // 실행 전제

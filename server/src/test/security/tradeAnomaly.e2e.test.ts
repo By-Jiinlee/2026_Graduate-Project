@@ -13,7 +13,7 @@ import { IP, Res, arg, del, die, get, hasFlag, loginAsTestUser, post } from './t
 //
 // tradeAmountAnomaly.test.ts 는 판정 함수를 직접 호출하는 정책 단위 검증이다.
 // 이 스크립트는 "실제 서비스 경로에서 거절되는가"를 확인한다. 즉
-//   HTTP → ipBlock → isAuthenticated(JWT) → requirePhoneVerified → hmacMiddleware
+//   HTTP → ipBlock → isAuthenticated(JWT) → requireAnyVerified(모의투자) → hmacMiddleware
 //        → 컨트롤러(PIN 검증 → 주문 평가 → evaluateTradeRequest) → 주문 실행
 // 전 구간을 통과시키고, 탐지 결과가 anomaly_logs 에 유형·조치·근거까지 정확히
 // 남는지 DB 로 교차 확인한다.

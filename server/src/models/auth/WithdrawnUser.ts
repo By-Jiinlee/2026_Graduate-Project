@@ -4,7 +4,7 @@ import sequelize from '../../config/database'
 interface WithdrawnUserAttributes {
   id: number
   original_user_id: number
-  email: string
+  email: string | null
   name: string
   phone?: string
   wallet_address?: string
@@ -21,7 +21,7 @@ class WithdrawnUser
 {
   public id!: number
   public original_user_id!: number
-  public email!: string
+  public email!: string | null
   public name!: string
   public phone?: string
   public wallet_address?: string
@@ -34,7 +34,7 @@ WithdrawnUser.init(
   {
     id: { type: DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
     original_user_id: { type: DataTypes.BIGINT, allowNull: false },
-    email: { type: DataTypes.STRING(100), allowNull: false },
+    email: { type: DataTypes.STRING(100), allowNull: true },  // 휴대폰 가입 계정은 이메일 없음
     name: { type: DataTypes.STRING(50), allowNull: false },
     phone: { type: DataTypes.STRING(20), allowNull: true },
     wallet_address: { type: DataTypes.STRING(42), allowNull: true },

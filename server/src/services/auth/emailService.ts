@@ -10,13 +10,38 @@ const transporter = nodemailer.createTransport({
   },
 })
 
+// 보안 경보(신규 기기·이상 탐지·기기 등록/해제)는 인증된 이메일로만 보낸다.
+// 휴대폰 인증으로 가입하면 이메일은 로그인 아이디일 뿐 소유가 확인되지 않았다. 그 주소가 남의 것이면
+// 로그인 IP·위치·기기가 담긴 경보가 제3자에게 가고, 남의 주소로 가입해 메일 폭탄을 보내는 데 쓰일 수도 있다.
+// 계정이 아닌 주소(관리자 경보 수신 주소 등)는 그대로 보낸다. 인증코드 메일(sendVerificationEmail)은 대상이 아니다.
+export const isAlertRecipientVerified = async (to: string): Promise<boolean> => {
+  try {
+    const { default: User } = await import('../../models/user/User')
+    const user = await User.findOne({ where: { email: to }, attributes: ['is_email_verified'] })
+    return !user || Boolean(user.is_email_verified)
+  } catch {
+    return true
+  }
+}
+
+const sendSecurityAlert = async (mail: Parameters<typeof transporter.sendMail>[0]): Promise<void> => {
+  const to = mail.to ? String(mail.to) : ''
+  // 이메일이 없는 계정(휴대폰 가입) — 보낼 곳이 없다
+  if (!to) return
+  if (!(await isAlertRecipientVerified(to))) {
+    console.info('[Email] 미인증 이메일 계정이라 보안 경보 메일을 보내지 않음')
+    return
+  }
+  await transporter.sendMail(mail)
+}
+
 export const sendVerificationEmail = async (
   email: string,
   code: string,
 ): Promise<void> => {
   await transporter.sendMail({
     from: `"UpTick" <${process.env.EMAIL_USER}>`,
-    to: email,
+    to: email ?? undefined,
     subject: '[UpTick] 이메일 인증코드',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
@@ -42,15 +67,15 @@ export const sendVerificationEmail = async (
 
 // 미등록 기기 로그인 알림
 export const sendNewDeviceAlert = async (
-  email: string,
+  email: string | null,
   label: string,
   ip: string,
   loginAt: Date,
 ): Promise<void> => {
   const timeStr = loginAt.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
-  await transporter.sendMail({
+  await sendSecurityAlert({
     from: `"UpTick" <${process.env.EMAIL_USER}>`,
-    to: email,
+    to: email ?? undefined,
     subject: '[UpTick] 새로운 기기에서 로그인되었습니다',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
@@ -69,14 +94,14 @@ export const sendNewDeviceAlert = async (
 
 // 신뢰 기기 등록 알림
 export const sendDeviceRegisteredAlert = async (
-  email: string,
+  email: string | null,
   label: string,
   ip: string,
 ): Promise<void> => {
   const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
-  await transporter.sendMail({
+  await sendSecurityAlert({
     from: `"UpTick" <${process.env.EMAIL_USER}>`,
-    to: email,
+    to: email ?? undefined,
     subject: '[UpTick] 새로운 신뢰 기기가 등록되었습니다',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
@@ -95,13 +120,13 @@ export const sendDeviceRegisteredAlert = async (
 
 // 신뢰 기기 삭제 알림
 export const sendDeviceRevokedAlert = async (
-  email: string,
+  email: string | null,
   label: string,
 ): Promise<void> => {
   const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
-  await transporter.sendMail({
+  await sendSecurityAlert({
     from: `"UpTick" <${process.env.EMAIL_USER}>`,
-    to: email,
+    to: email ?? undefined,
     subject: '[UpTick] 신뢰 기기가 삭제되었습니다',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
@@ -120,7 +145,7 @@ export const sendDeviceRevokedAlert = async (
 
 // 이상 로그인 시도 감지 알림
 export const sendAnomalyAlertEmail = async (
-  email: string,
+  email: string | null,
   ctx: {
     reasons: string[]
     ip: string
@@ -130,9 +155,9 @@ export const sendAnomalyAlertEmail = async (
 ): Promise<void> => {
   const timeStr = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
 
-  await transporter.sendMail({
+  await sendSecurityAlert({
     from: `"UpTick" <${process.env.EMAIL_USER}>`,
-    to: email,
+    to: email ?? undefined,
     subject: '[UpTick] 비정상 로그인 시도가 감지되었습니다',
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto;">

@@ -4,6 +4,7 @@ import { checkIPAbuse } from '../../services/auth/abuseIPDBService'
 import { blockIP } from '../security/ipBlockMiddleware'
 import AnomalyLog from '../../models/auth/AnomalyLog'
 import { getClientIp } from '../../utils/getClientIp'
+import { LOGIN_CHALLENGE_COOKIE, LOGIN_CHALLENGE_TTL_MS } from '../../services/auth/loginChallengeService'
 import {
   assessRisk,
   collectRiskSignals,
@@ -65,9 +66,13 @@ export async function checkAccountLock(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const { email } = req.body
+  // 로그인 아이디가 이메일일 때만 미리 조회한다(휴대폰은 1단계에서 계정을 해석한다). 이 값은 안내용이며
+  // 실제 거부는 비밀번호 검증 이후 authService.loginStep1 이 한다.
+  const email = typeof req.body.loginId === 'string' && req.body.loginId.includes('@')
+    ? req.body.loginId
+    : req.body.email
 
-  if (!email) {
+  if (!email || typeof email !== 'string') {
     next()
     return
   }
@@ -80,6 +85,18 @@ export async function checkAccountLock(
     console.error('[anomalyMiddleware] checkAccountLock error:', err)
     next()
   }
+}
+
+// 1단계 성공 응답에만 2단계 챌린지 쿠키를 싣는다. 차단 응답(403)에는 절대 싣지 않는다.
+function attachLoginChallenge(res: Response): void {
+  const token = res.locals.loginChallenge
+  if (!res.locals.loginSuccess || typeof token !== 'string') return
+  res.cookie(LOGIN_CHALLENGE_COOKIE, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    maxAge: LOGIN_CHALLENGE_TTL_MS,
+  })
 }
 
 // ─────────────────────────────────────────────
@@ -99,8 +116,8 @@ export async function analyzeAfterLogin(
 ): Promise<void> {
   const { loginSuccess, loginEmail, loginUserId, responseData, responseStatus } = res.locals
 
-  // loginEmail 없으면 이상탐지 대상 아님 — 그대로 응답
-  if (!loginEmail) {
+  // 로그인 아이디가 없으면 이상탐지 대상 아님 — 그대로 응답
+  if (!loginEmail && !res.locals.loginKey) {
     res.status(responseStatus ?? 400).json(responseData)
     return
   }
@@ -118,6 +135,9 @@ export async function analyzeAfterLogin(
       userAgent: req.headers['user-agent'],
       success: loginSuccess ?? false,
       isStep2: res.locals.isStep2 ?? false,
+      deviceHash: res.locals.deviceHash,
+      loginKey: res.locals.loginKey,
+      accountId: res.locals.loginAccountId,
     })
 
     // 임계 초과 차단 — 계정 잠금과 IP 차단을 같은 응답으로 돌려준다.
@@ -191,11 +211,13 @@ export async function analyzeAfterLogin(
     }
 
     // 정상 응답
+    attachLoginChallenge(res)
     res.status(responseStatus ?? 200).json(responseData)
 
   } catch (err) {
     console.error('[anomalyMiddleware] analyzeAfterLogin error:', err)
     // fail-open — 이상탐지 실패해도 원래 응답은 정상 전송
+    attachLoginChallenge(res)
     res.status(responseStatus ?? 200).json(responseData)
   }
 }

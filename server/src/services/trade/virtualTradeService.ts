@@ -7,7 +7,7 @@ import VirtualOrder from '../../models/trade/VirtualOrder'
 import User from '../../models/user/User'
 import { priceMap } from '../market/KisRealtime'
 import { QueryTypes } from 'sequelize'
-import { recordSeed, logTrade, getTradeNonce, verifyTradeSignature } from '../web3/contractService'
+import { recordSeed, logTrade, getTradeNonce, verifyTradeSignature, buildTradeDescriptor } from '../web3/contractService'
 import Wallet from '../../models/user/Wallet'
 import { TRADE_POLICY } from '../auth/tradeAnomalyService'
 import { recordTradeAuthAttempt } from '../auth/anomalyService'
@@ -70,7 +70,7 @@ export const verifyPin = async (
       success: ok,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
-      email: ctx.email ?? user.email,
+      email: ctx.email ?? user.email ?? undefined,
     })
   }
 
@@ -223,6 +223,84 @@ export const isLargeOrder = async (
   return actualAmount > threshold * TRADE_POLICY.RATIO.STEP_UP
 }
 
+// ─── 고액 주문 재인증(지갑 서명) ─────────────────────────────
+
+// 시장가 주문은 서명 시점의 화면 가격과 체결 시점의 서버 가격이 다를 수 있다.
+// 사용자가 서명한 금액의 ±3% 를 넘는 차이는 가격 변동이 아니라 서명과 다른 주문으로 보고
+// 다시 서명을 요구한다. 기준을 서명 금액에 두어야 상승·하락 방향 모두 같은 폭이 허용된다.
+export const MARKET_SIGNED_AMOUNT_TOLERANCE = 0.03
+
+// 서명된 금액이 서버가 계산한 실제 주문 금액과 맞는지 확인한다.
+// 이전에는 클라이언트가 보낸 signedAmount 로 서명을 검증하기만 하고 실제 금액과 비교하지 않아,
+// 작은 금액에 받은 서명으로 큰 주문을 통과시킬 수 있었다.
+export const checkSignedAmount = (
+  orderType: 'market' | 'limit',
+  signedAmount: bigint | undefined,
+  actualAmount: number,
+): void => {
+  if (signedAmount === undefined || signedAmount <= BigInt(0)) {
+    throw new Error('서명한 주문 금액이 전달되지 않았습니다. 다시 서명해주세요')
+  }
+  const actual = BigInt(Math.round(actualAmount))
+  if (orderType === 'limit') {
+    if (signedAmount !== actual) throw new Error('서명한 주문 금액과 실제 주문 금액이 다릅니다. 다시 서명해주세요')
+    return
+  }
+  const diff = signedAmount > actual ? signedAmount - actual : actual - signedAmount
+  if (Number(diff) > Number(signedAmount) * MARKET_SIGNED_AMOUNT_TOLERANCE) {
+    throw new Error('서명 이후 가격이 크게 변동했습니다. 다시 서명해주세요')
+  }
+}
+
+// 서명을 검증하고, 검증에 쓴 거래 논스를 돌려준다(감사 기록에 같은 논스를 남기기 위함).
+// 서명 대상은 서버가 직접 만든 주문 서술자다 — 수량·매수/매도·주문 유형을 클라이언트가
+// 바꾸면 해시가 달라져 서명 검증이 실패한다.
+export const verifyOrderSignature = async (p: {
+  userId: number
+  side: 'buy' | 'sell'
+  stockCode: string
+  orderType: 'market' | 'limit'
+  quantity: number
+  limitPrice?: number
+  signedAmount?: bigint
+  tradeSignature: string
+  actualAmount: number
+  ipAddress: string
+  userAgent?: string
+}): Promise<{ walletAddress: string; nonce: bigint }> => {
+  // 지갑이 없는 계정에 서명이 붙어 오면 검증할 수 없다. 이전에는 이 경우 서명을 그냥 건너뛰어
+  // 재인증이 필요한 주문이 임의 문자열 서명으로 통과했다.
+  const wallet = await Wallet.findOne({ where: { user_id: p.userId, is_primary: true } })
+  if (!wallet) throw new Error('지갑이 등록되지 않은 계정은 고액 주문을 할 수 없습니다')
+
+  checkSignedAmount(p.orderType, p.signedAmount, p.actualAmount)
+
+  const descriptor = buildTradeDescriptor({
+    stockCode: p.stockCode,
+    side: p.side,
+    orderType: p.orderType,
+    quantity: p.quantity,
+    limitPrice: p.limitPrice,
+  })
+  const nonce = await getTradeNonce(wallet.address)
+  // 고액 거래 재인증(지갑 서명)의 성공·실패도 M-5 판정 대상이다. 서명 위조를 반복하다
+  // 결국 통과한 경우가 PIN 반복 실패 후 성공과 같은 성격의 신호이기 때문이다.
+  try {
+    await verifyTradeSignature(wallet.address, nonce, p.signedAmount!, descriptor, p.tradeSignature)
+  } catch (err) {
+    void recordTradeAuthAttempt({
+      userId: p.userId, method: 'WALLET_SIGNATURE', success: false,
+      ip: p.ipAddress, userAgent: p.userAgent,
+    })
+    throw err
+  }
+  void recordTradeAuthAttempt({
+    userId: p.userId, method: 'WALLET_SIGNATURE', success: true,
+    ip: p.ipAddress, userAgent: p.userAgent,
+  })
+  return { walletAddress: wallet.address, nonce }
+}
+
 // ─── 매수 ─────────────────────────────────────────────────────
 
 interface BuyParams {
@@ -242,6 +320,7 @@ interface BuyParams {
 }
 
 export const buyStock = async (params: BuyParams) => {
+  const SIDE = 'buy' as const
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
 
   await assertNotCanary({ userId, code: 'CN-01', action: '모의투자 매수', ip: ipAddress, userAgent })
@@ -254,26 +333,12 @@ export const buyStock = async (params: BuyParams) => {
   const fee = Math.floor(totalAmount * FEE_RATE)
   const totalCost = totalAmount + fee
 
-  const wallet = await Wallet.findOne({ where: { user_id: userId } })
-  if (tradeSignature && wallet) {
-    const nonce = await getTradeNonce(wallet.address)
-    const verifyAmount = signedAmount ?? BigInt(Math.round(totalAmount))
-    // 고액 거래 재인증(지갑 서명)의 성공·실패도 M-5 판정 대상이다. 서명 위조를 반복하다
-    // 결국 통과한 경우가 PIN 반복 실패 후 성공과 같은 성격의 신호이기 때문이다.
-    try {
-      await verifyTradeSignature(wallet.address, nonce, verifyAmount, stockCode, tradeSignature)
-    } catch (err) {
-      void recordTradeAuthAttempt({
-        userId, method: 'WALLET_SIGNATURE', success: false,
-        ip: ipAddress, userAgent,
+  const signed = tradeSignature
+    ? await verifyOrderSignature({
+        userId, side: SIDE, stockCode, orderType, quantity, limitPrice,
+        signedAmount, tradeSignature, actualAmount: totalAmount, ipAddress, userAgent,
       })
-      throw err
-    }
-    void recordTradeAuthAttempt({
-      userId, method: 'WALLET_SIGNATURE', success: true,
-      ip: ipAddress, userAgent,
-    })
-  }
+    : null
 
   const t: Transaction = await sequelize.transaction()
   try {
@@ -317,10 +382,9 @@ export const buyStock = async (params: BuyParams) => {
 
     await t.commit()
 
-    if (tradeSignature && wallet) {
+    if (signed) {
       try {
-        const nonce = await getTradeNonce(wallet.address)
-        await logTrade(wallet.address, stockCode, 'buy', BigInt(Math.round(totalCost)), nonce)
+        await logTrade(signed.walletAddress, stockCode, 'buy', BigInt(Math.round(totalCost)), signed.nonce)
       } catch (err) {
         console.error('[MockTrade] logTrade 실패:', err)
       }
@@ -352,6 +416,7 @@ interface SellParams {
 }
 
 export const sellStock = async (params: SellParams) => {
+  const SIDE = 'sell' as const
   const { userId, stockId, stockCode, quantity, orderType, limitPrice, tradeSignature, signedAmount, ipAddress, country, region, city, userAgent } = params
 
   await assertNotCanary({ userId, code: 'CN-02', action: '모의투자 매도', ip: ipAddress, userAgent })
@@ -364,26 +429,12 @@ export const sellStock = async (params: SellParams) => {
   const fee = Math.floor(totalAmount * FEE_RATE)
   const proceeds = totalAmount - fee
 
-  const wallet = await Wallet.findOne({ where: { user_id: userId } })
-  if (tradeSignature && wallet) {
-    const nonce = await getTradeNonce(wallet.address)
-    const verifyAmount = signedAmount ?? BigInt(Math.round(totalAmount))
-    // 고액 거래 재인증(지갑 서명)의 성공·실패도 M-5 판정 대상이다. 서명 위조를 반복하다
-    // 결국 통과한 경우가 PIN 반복 실패 후 성공과 같은 성격의 신호이기 때문이다.
-    try {
-      await verifyTradeSignature(wallet.address, nonce, verifyAmount, stockCode, tradeSignature)
-    } catch (err) {
-      void recordTradeAuthAttempt({
-        userId, method: 'WALLET_SIGNATURE', success: false,
-        ip: ipAddress, userAgent,
+  const signed = tradeSignature
+    ? await verifyOrderSignature({
+        userId, side: SIDE, stockCode, orderType, quantity, limitPrice,
+        signedAmount, tradeSignature, actualAmount: totalAmount, ipAddress, userAgent,
       })
-      throw err
-    }
-    void recordTradeAuthAttempt({
-      userId, method: 'WALLET_SIGNATURE', success: true,
-      ip: ipAddress, userAgent,
-    })
-  }
+    : null
 
   const t: Transaction = await sequelize.transaction()
   try {
@@ -443,10 +494,9 @@ export const sellStock = async (params: SellParams) => {
 
     await t.commit()
 
-    if (tradeSignature && wallet) {
+    if (signed) {
       try {
-        const nonce = await getTradeNonce(wallet.address)
-        await logTrade(wallet.address, stockCode, 'sell', BigInt(Math.round(totalAmount)), nonce)
+        await logTrade(signed.walletAddress, stockCode, 'sell', BigInt(Math.round(totalAmount)), signed.nonce)
       } catch (err) {
         console.error('[MockTrade] logTrade 실패:', err)
       }

@@ -321,10 +321,11 @@ interface LoginRecord {
 
 interface UserInfo {
   id: number
-  email: string
+  email: string | null
   name: string
   nickname: string | null
   phone: string | null
+  is_email_verified: boolean
   is_phone_verified: boolean
   email_changed_at: string | null
 }
@@ -904,6 +905,7 @@ export default function MyPage() {
                         <input
                           type="email"
                           value={userInfo?.email ?? ''}
+                          placeholder="등록된 이메일 없음 (휴대폰 번호로 로그인)"
                           readOnly
                           className="flex-1 px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm text-gray-500 outline-none"
                         />
@@ -911,7 +913,7 @@ export default function MyPage() {
                           onClick={() => { setEmailChanging(v => !v); setEmailMsg(''); setEmailStep('input'); setNewEmail(''); setEmailCode('') }}
                           className="px-4 py-3 bg-white border border-gray-200 text-gray-500 font-semibold rounded-xl hover:border-gray-300 hover:text-gray-700 transition text-sm"
                         >
-                          {emailChanging ? '취소' : '변경'}
+                          {emailChanging ? '취소' : userInfo?.email ? '변경' : '등록'}
                         </button>
                       </div>
                       {emailChanging && (
@@ -1213,11 +1215,18 @@ export default function MyPage() {
                     <h4 className="font-bold text-gray-800 mb-3">
                       {mode === 'virtual' ? '모의투자 계좌' : '실거래 계좌'}
                     </h4>
-                    {!userInfo?.is_phone_verified ? (
+                    {/* 모의투자는 이메일·휴대폰 중 하나, 실거래는 둘 다 인증해야 계좌를 설정할 수 있다(서버와 같은 규칙) */}
+                    {(mode === 'real'
+                      ? !(userInfo?.is_email_verified && userInfo?.is_phone_verified)
+                      : !(userInfo?.is_email_verified || userInfo?.is_phone_verified)) ? (
                       <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 text-center">
                         <div className="text-2xl mb-2">🔐</div>
-                        <p className="font-semibold text-gray-800 text-sm mb-1">계좌 설정을 위해 휴대폰 인증이 필요합니다</p>
-                        <p className="text-xs text-gray-500">위에서 휴대폰 인증을 먼저 완료해주세요.</p>
+                        <p className="font-semibold text-gray-800 text-sm mb-1">
+                          {mode === 'real'
+                            ? `실거래 계좌 설정에는 이메일과 휴대폰 인증이 모두 필요합니다 (미완료: ${[!userInfo?.is_email_verified && '이메일', !userInfo?.is_phone_verified && '휴대폰'].filter(Boolean).join('·')})`
+                            : '모의투자 계좌 설정에는 이메일 또는 휴대폰 인증이 필요합니다'}
+                        </p>
+                        <p className="text-xs text-gray-500">위에서 인증을 먼저 완료해주세요.</p>
                       </div>
                     ) : (
                       <AccountSection mode={mode} onAccountChange={() => setRealAccountKey(k => k + 1)} />

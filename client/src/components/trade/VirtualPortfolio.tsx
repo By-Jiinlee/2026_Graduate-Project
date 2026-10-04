@@ -189,11 +189,19 @@ export default function VirtualPortfolio() {
       }
     })
 
+    // 장 마감까지 체결되지 않은 지정가 주문은 서버가 자동 취소한다(당일 유효). 매수는 예약금이 돌아온다.
+    socket.on('order:expired', (data: any) => {
+      const sideText = data.side === 'buy' ? '매수' : '매도'
+      toast(`[장 마감] ${data.stockCode} ${data.quantity}주 ${sideText} 미체결 주문이 취소되었습니다`)
+      if (fetchPortfolio) fetchPortfolio()
+    })
+
     return () => {
       portfolio.holdings.forEach(h => socket.emit('unsubscribe:stock', h.code))
       
       // 3. ★ 언마운트 시 체결 알림 끄기 추가 ★
-      socket.off('order:filled') 
+      socket.off('order:filled')
+      socket.off('order:expired')
       socket.disconnect()
     }
   }, [portfolio?.holdings.map(h => h.code).join(',')])

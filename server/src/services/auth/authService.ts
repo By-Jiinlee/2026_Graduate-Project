@@ -12,8 +12,10 @@ import {
   registerWalletFor,
   unregisterWallet,
   getAuthNonce,
+  getUsableAuthNonce,
   verifySignature as contractVerifySignature,
-  buildAuthMessage,
+  buildRegisterMessage,
+  hasNonceHistory,
 } from '../web3/contractService'
 import { sendVerificationEmail } from './emailService'
 import { sendVerificationSms } from './smsService'
@@ -22,11 +24,27 @@ import { buildLabel } from './trustedDeviceService'
 import { Op } from 'sequelize'
 import Blacklist from '../../models/auth/Blacklist'
 import WithdrawnUser from '../../models/auth/WithdrawnUser'
+import sequelize from '../../config/database'
+import {
+  accountDisplay,
+  accountLoginKey,
+  identifierDisplay,
+  identifierLoginKey,
+  type LoginIdentifier,
+} from '../../utils/loginIdentifier'
 
 // ─── 이메일 인증 ──────────────────────────────────────────────
 
-// 이메일 인증코드 발송
-export const sendEmailCode = async (email: string): Promise<void> => {
+// 가입 지갑 서명에 묶는 신원 — 클라이언트(Register.tsx)와 같은 규칙
+export const signupIdentity = (email: string | null, phone: string | null): string =>
+  email ? email : `phone:${phone ?? ''}`
+
+// 가입 인증 성공 기록의 유효 시간 — 오래전 인증이 기한 없이 가입 근거로 남지 않게 한다
+export const SIGNUP_VERIFICATION_WINDOW_MS = 30 * 60 * 1000
+
+// 가입에 쓸 수 있는 이메일인가. 이메일 인증 발송과 가입 둘 다에서 확인한다 —
+// 휴대폰 인증으로 가입하면 이메일 발송 단계를 거치지 않으므로 가입 시점에도 같은 검사가 필요하다.
+const assertEmailAvailableForSignup = async (email: string): Promise<void> => {
   // 블랙리스트 확인
   const blacklisted = await Blacklist.findOne({ where: { email } })
   if (blacklisted) throw new Error('이용이 제한된 계정입니다')
@@ -51,12 +69,16 @@ export const sendEmailCode = async (email: string): Promise<void> => {
     where: { email, status: { [Op.ne]: 'withdrawn' } },
   })
   if (existing) throw new Error('이미 사용 중인 이메일입니다')
+}
 
+// 이메일 인증코드 발송 (가입용)
+export const sendEmailCode = async (email: string): Promise<void> => {
+  await assertEmailAvailableForSignup(email)
 
-  // 기존 미사용 코드 무효화
+  // 기존 미사용 코드 무효화 — 무효화는 is_used 만 바꾼다. 인증 성공(verified_at)과는 별개다.
   await EmailVerification.update(
     { is_used: true },
-    { where: { email, is_used: false } },
+    { where: { email, is_used: false, purpose: 'SIGNUP' } },
   )
 
   // 재발송 횟수 확인 (일 5회 제한)
@@ -91,6 +113,7 @@ export const sendEmailCode = async (email: string): Promise<void> => {
     expires_at: expiresAt,
     is_used: false,
     fail_count: 0,
+    purpose: 'SIGNUP',
   })
   await sendVerificationEmail(email, code)
 }
@@ -100,7 +123,7 @@ export const verifyEmailCode = async (
   code: string,
 ): Promise<void> => {
   const record = await EmailVerification.findOne({
-    where: { email, is_used: false },
+    where: { email, is_used: false, purpose: 'SIGNUP' },
     order: [['created_at', 'DESC']],
   })
 
@@ -120,7 +143,7 @@ export const verifyEmailCode = async (
     throw new Error(`인증코드가 올바르지 않습니다. 남은 시도: ${remaining}회`)
   }
 
-  await record.update({ is_used: true })
+  await record.update({ is_used: true, verified_at: new Date() })
 }
 
 // ─── SMS 인증 ────────────────────────────────────────────────
@@ -131,10 +154,10 @@ export const sendSmsCode = async (phone: string): Promise<void> => {
   const existing = await User.findOne({ where: { phone } })
   if (existing) throw new Error('이미 사용 중인 휴대폰 번호입니다')
 
-  // 기존 미사용 코드 무효화
+  // 기존 미사용 코드 무효화(가입용만)
   await SmsVerification.update(
     { is_used: true },
-    { where: { phone, is_used: false } },
+    { where: { phone, is_used: false, purpose: 'SIGNUP' } },
   )
 
   // 재발송 횟수 확인 (일 5회 제한)
@@ -169,6 +192,7 @@ export const sendSmsCode = async (phone: string): Promise<void> => {
     expires_at: expiresAt,
     is_used: false,
     fail_count: 0,
+    purpose: 'SIGNUP',
   })
   await sendVerificationSms(phone, code)
 }
@@ -179,7 +203,7 @@ export const verifySmsCode = async (
   code: string,
 ): Promise<void> => {
   const record = await SmsVerification.findOne({
-    where: { phone, is_used: false },
+    where: { phone, is_used: false, purpose: 'SIGNUP' },
     order: [['created_at', 'DESC']],
   })
 
@@ -198,16 +222,16 @@ export const verifySmsCode = async (
     throw new Error(`인증코드가 올바르지 않습니다. 남은 시도: ${remaining}회`)
   }
 
-  await record.update({ is_used: true })
+  await record.update({ is_used: true, verified_at: new Date() })
 }
 
 // ─── 회원가입 ─────────────────────────────────────────────────
 
 export const register = async (
-  email: string,
+  email: string | null | undefined,
   password: string,
   name: string,
-  phone: string,
+  phone: string | null | undefined,
   walletAddress: string,
   walletSignature: string,
   terms_agreed: boolean,
@@ -216,20 +240,33 @@ export const register = async (
   age_agreed: boolean,
   marketing_agreed: boolean,
 ) => {
-  const emailVerified = await EmailVerification.findOne({
-    where: { email, is_used: true },
-    order: [['created_at', 'DESC']],
-  })
-  if (!emailVerified) throw new Error('이메일 인증이 완료되지 않았습니다')
-
-  let phoneVerifiedDuringRegister = false
-  if (phone) {
-    const smsVerified = await SmsVerification.findOne({
-      where: { phone, is_used: true },
-      order: [['created_at', 'DESC']],
-    })
-    if (!smsVerified) throw new Error('휴대폰 인증이 완료되지 않았습니다')
-    phoneVerifiedDuringRegister = true
+  // 본인 인증 — 이메일 또는 휴대폰 중 하나 이상, 그리고 낸 값은 전부 인증된 값이어야 한다.
+  //   - 이메일로 가입하면 이메일이, 휴대폰으로 가입하면 휴대폰 번호가 로그인 아이디가 된다.
+  //   - 인증하지 않은 이메일·번호를 받지 않는다. 받으면 남의 이메일·번호를 선점해 그 주인의 가입을 막거나
+  //     그 주소로 보안 경보를 보내게 만들 수 있다.
+  // 인증 성공(verified_at)이 최근 30분 이내이고, 가입용(SIGNUP)이며, 아직 가입에 쓰이지 않은 기록만 인정한다.
+  const emailNorm = typeof email === 'string' && email.trim() ? email.trim() : null
+  const phoneNorm = typeof phone === 'string' && phone.trim() ? phone.trim() : null
+  if (!emailNorm && !phoneNorm) throw new Error('이메일 또는 휴대폰 인증을 완료해주세요')
+  if (emailNorm) await assertEmailAvailableForSignup(emailNorm)
+  const since = new Date(Date.now() - SIGNUP_VERIFICATION_WINDOW_MS)
+  const emailRecord = emailNorm
+    ? await EmailVerification.findOne({
+        where: { email: emailNorm, purpose: 'SIGNUP', verified_at: { [Op.gte]: since }, consumed_at: null },
+        order: [['verified_at', 'DESC']],
+      })
+    : null
+  const phoneRecord = phoneNorm
+    ? await SmsVerification.findOne({
+        where: { phone: phoneNorm, purpose: 'SIGNUP', verified_at: { [Op.gte]: since }, consumed_at: null },
+        order: [['verified_at', 'DESC']],
+      })
+    : null
+  if (emailNorm && !emailRecord) throw new Error('이메일 인증이 완료되지 않았습니다')
+  if (phoneNorm && !phoneRecord) throw new Error('휴대폰 인증이 완료되지 않았습니다')
+  if (phoneNorm) {
+    const phoneTaken = await User.findOne({ where: { phone: phoneNorm } })
+    if (phoneTaken) throw new Error('이미 사용 중인 휴대폰 번호입니다')
   }
 
   const existingWallet = await Wallet.findOne({
@@ -240,7 +277,17 @@ export const register = async (
   const onChainRegistered = await isWalletRegistered(walletAddress)
   if (onChainRegistered) throw new Error('이미 온체인에 등록된 지갑 주소입니다')
 
-  const message = buildAuthMessage(walletAddress, BigInt(0))
+  // 탈퇴로 등록 해제된 지갑의 재가입 차단.
+  // 컨트랙트는 등록 해제 시 논스를 0 으로 되돌리므로, 같은 지갑을 다시 등록하면 과거에
+  // 사용된 0..k 번 서명이 체인 기준으로 다시 유효해진다. 1인 1계정 원칙상 지갑은 계정의
+  // 신원이기도 하므로 한 번 계정에 쓰인 지갑은 다른 계정의 신원으로 재사용하지 않는다.
+  const previouslyUsed =
+    (await hasNonceHistory(walletAddress)) ||
+    (await WithdrawnUser.findOne({ where: { wallet_address: { [Op.in]: [walletAddress, walletAddress.toLowerCase()] } } })) !== null
+  if (previouslyUsed) throw new Error('이전에 다른 계정에서 사용된 지갑은 재사용할 수 없습니다. 새 지갑으로 가입해주세요')
+
+  // 가입 서명은 로그인 서명과 다른 용도 태그·가입 신원(이메일, 없으면 phone:번호)을 묶은 메시지에 대한 서명이다.
+  const message = buildRegisterMessage(walletAddress, signupIdentity(emailNorm, phoneNorm))
   const { recoverMessageAddress } = await import('viem')
   const recovered = await recoverMessageAddress({
     message: { raw: message },
@@ -252,35 +299,56 @@ export const register = async (
 
   const password_hash = await bcrypt.hash(password, 12)
 
-  const user = await User.create({
-  email,
-  password_hash,
-  name,
-  phone: phone || null,
-  role: 'user',
-  is_email_verified: true,
-  is_locked: false,
-  status: 'active',
-  is_phone_verified: phoneVerifiedDuringRegister,
-  terms_agreed,
-  privacy_agreed,
-  location_agreed,
-  age_agreed,
-  marketing_agreed,
-})
+  // 인증 소비·사용자·지갑 생성을 한 트랜잭션으로 묶는다. 같은 인증으로 동시에 두 번 가입하면
+  // 소비 갱신이 한쪽에서만 성공하므로(consumed_at IS NULL 조건) 다른 쪽은 되돌려진다.
+  // 온체인 등록은 되돌릴 수 없으므로 DB 쓰기를 마친 뒤 커밋 직전에 수행한다 — 체인 등록이 실패하면
+  // 사용자 행도 남지 않는다(이전에는 사용자만 생성되고 지갑이 없는 계정이 남을 수 있었다).
+  const t = await sequelize.transaction()
+  try {
+    const now = new Date()
+    const consume = async (model: typeof EmailVerification | typeof SmsVerification, id: number) => {
+      const [n] = await (model as any).update(
+        { consumed_at: now },
+        { where: { id, consumed_at: null }, transaction: t },
+      )
+      if (n !== 1) throw new Error('이미 사용된 인증입니다. 다시 인증해주세요')
+    }
+    if (emailRecord) await consume(EmailVerification, emailRecord.id)
+    if (phoneRecord) await consume(SmsVerification, phoneRecord.id)
 
-  await registerWalletFor(walletAddress)
+    const user = await User.create({
+      email: emailNorm,
+      password_hash,
+      name,
+      phone: phoneNorm,
+      role: 'user',
+      is_email_verified: emailRecord !== null,
+      is_locked: false,
+      status: 'active',
+      is_phone_verified: phoneRecord !== null,
+      terms_agreed,
+      privacy_agreed,
+      location_agreed,
+      age_agreed,
+      marketing_agreed,
+    }, { transaction: t })
 
-  await Wallet.create({
-    user_id: user.id,
-    address: walletAddress,
-    network: 'sepolia',
-    seed_amount: 0,
-    is_primary: true,
-    linked_at: new Date(),
-  })
+    await Wallet.create({
+      user_id: user.id,
+      address: walletAddress,
+      network: 'sepolia',
+      seed_amount: 0,
+      is_primary: true,
+      linked_at: now,
+    }, { transaction: t })
 
-  return user
+    await registerWalletFor(walletAddress)
+    await t.commit()
+    return user
+  } catch (err) {
+    await t.rollback()
+    throw err
+  }
 }
 
 // ─── 로그인 ───────────────────────────────────────────────────
@@ -291,8 +359,37 @@ export const register = async (
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 12)
 
 // 1단계: 이메일 + 비밀번호 검증 → nonce 반환
-export const loginStep1 = async (email: string, password: string) => {
-  const user = await User.findOne({ where: { email } })
+// 로그인 아이디(이메일 또는 휴대폰)로 계정을 찾는다. 실패한 로그인도 계정 기준으로 집계해야 하므로
+// 비밀번호 검증과 분리해 컨트롤러가 먼저 호출한다.
+//   - 휴대폰은 인증된 번호(is_phone_verified)만 로그인 아이디로 인정한다. 인증 안 된 번호를 아이디로 쓰면
+//     남의 번호를 적어 둔 계정으로 그 번호 주인을 사칭할 수 있다.
+//   - 같은 번호의 계정이 둘 이상이면(유일 제약 이전 데이터) 어느 쪽인지 정할 수 없으므로 찾지 못한 것으로 본다.
+export interface LoginAccount {
+  identifier: LoginIdentifier
+  user: User | null
+  loginKey: string   // 무차별 대입 집계 키(계정 기준)
+  display: string    // 이상 로그 표시값(휴대폰은 가림)
+}
+
+export const resolveLoginAccount = async (identifier: LoginIdentifier): Promise<LoginAccount> => {
+  let user: User | null = null
+  if (identifier.kind === 'email') {
+    user = await User.findOne({ where: { email: identifier.value } })
+  } else {
+    const found = await User.findAll({ where: { phone: identifier.value, is_phone_verified: true }, limit: 2 })
+    if (found.length === 1) user = found[0]
+    else if (found.length > 1) console.warn('[Auth] 같은 휴대폰 번호의 계정이 여럿이라 휴대폰 로그인을 거부함')
+  }
+  return {
+    identifier,
+    user,
+    loginKey: user ? accountLoginKey(user) : identifierLoginKey(identifier),
+    display: user ? accountDisplay(user) : identifierDisplay(identifier),
+  }
+}
+
+export const loginStep1 = async (account: LoginAccount, password: string) => {
+  const { user } = account
 
   // 계정 열거(enumeration) 억제
   //  1) 잠금·탈퇴 여부를 비밀번호 검증 "이후"에 확인한다. 이전에 확인하면 비밀번호를
@@ -301,7 +398,7 @@ export const loginStep1 = async (email: string, password: string) => {
   //     문구가 같아도 타이밍으로 존재 여부가 드러난다.
   const hash = user?.password_hash ?? DUMMY_PASSWORD_HASH
   const isMatch = await bcrypt.compare(password, hash)
-  if (!user || !isMatch) throw new Error('이메일 또는 비밀번호가 올바르지 않습니다')
+  if (!user || !isMatch) throw new Error('아이디 또는 비밀번호가 올바르지 않습니다')
 
   if (user.is_locked) throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
   if (user.status === 'withdrawn') throw new Error('탈퇴한 계정입니다')
@@ -309,7 +406,7 @@ export const loginStep1 = async (email: string, password: string) => {
   const wallet = await Wallet.findOne({ where: { user_id: user.id, is_primary: true } })
   if (!wallet) throw new Error('지갑이 등록되지 않은 계정입니다')
 
-  const nonce = await getAuthNonce(wallet.address)
+  const nonce = await getUsableAuthNonce(wallet.address)
   return {
     userId: user.id,
     walletAddress: wallet.address,
@@ -328,6 +425,15 @@ export const loginStep2 = async (
 ) => {
   const user = await User.findByPk(userId)
   if (!user) throw new Error('유저를 찾을 수 없습니다')
+  if (user.is_locked) throw new Error('계정이 잠겼습니다. 관리자에게 문의하세요')
+  if (user.status === 'withdrawn') throw new Error('탈퇴한 계정입니다')
+
+  // 서명을 검증할 지갑은 이 계정에 등록된 지갑이어야 한다. 온체인 레지스트리는 "등록된 지갑의
+  // 집합"만 알 뿐 지갑과 계정의 대응을 모르므로, 이 대조가 없으면 다른 계정의 지갑 서명도 통과한다.
+  const owned = await Wallet.findOne({ where: { user_id: userId, is_primary: true } })
+  if (!owned || owned.address.toLowerCase() !== walletAddress.toLowerCase()) {
+    throw new Error('이 계정에 등록된 지갑이 아닙니다')
+  }
 
   const nonce = await getAuthNonce(walletAddress)
 
@@ -445,10 +551,10 @@ export const sendPhoneCode = async (userId: number, phone: string): Promise<void
     throw new Error('이미 사용 중인 휴대폰 번호입니다')
   }
 
-  // 기존 미사용 코드 무효화
+  // 기존 미사용 코드 무효화(마이페이지 용도만)
   await SmsVerification.update(
     { is_used: true },
-    { where: { phone, is_used: false } },
+    { where: { phone, is_used: false, purpose: 'PHONE_CHANGE' } },
   )
 
   // 일 5회 제한
@@ -472,7 +578,7 @@ export const sendPhoneCode = async (userId: number, phone: string): Promise<void
   const code = crypto.randomInt(100000, 999999).toString()
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
 
-  const record = await SmsVerification.create({ phone, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  const record = await SmsVerification.create({ phone, code, expires_at: expiresAt, is_used: false, fail_count: 0, purpose: 'PHONE_CHANGE' })
   try {
     await sendVerificationSms(phone, code)
   } catch (smsError: any) {
@@ -484,7 +590,7 @@ export const sendPhoneCode = async (userId: number, phone: string): Promise<void
 
 export const verifyPhoneCode = async (userId: number, phone: string, code: string): Promise<void> => {
   const record = await SmsVerification.findOne({
-    where: { phone, is_used: false },
+    where: { phone, is_used: false, purpose: 'PHONE_CHANGE' },
     order: [['created_at', 'DESC']],
   })
 
@@ -502,7 +608,7 @@ export const verifyPhoneCode = async (userId: number, phone: string, code: strin
     throw new Error(`인증코드가 올바르지 않습니다. 남은 시도: ${remaining}회`)
   }
 
-  await record.update({ is_used: true })
+  await record.update({ is_used: true, verified_at: new Date() })
 
   // 유저 휴대폰 번호 저장 + 인증 완료 처리
   await User.update(
@@ -546,7 +652,7 @@ export const sendEmailChangeCode = async (userId: number, newEmail: string): Pro
   if (existing && existing.id !== userId) throw new Error('이미 사용 중인 이메일입니다')
 
   // 기존 미사용 코드 무효화
-  await EmailVerification.update({ is_used: true }, { where: { email: newEmail, is_used: false } })
+  await EmailVerification.update({ is_used: true }, { where: { email: newEmail, is_used: false, purpose: 'EMAIL_CHANGE' } })
 
   // 일 5회 제한
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
@@ -562,7 +668,7 @@ export const sendEmailChangeCode = async (userId: number, newEmail: string): Pro
 
   const code = crypto.randomInt(100000, 999999).toString()
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
-  await EmailVerification.create({ email: newEmail, code, expires_at: expiresAt, is_used: false, fail_count: 0 })
+  await EmailVerification.create({ email: newEmail, code, expires_at: expiresAt, is_used: false, fail_count: 0, purpose: 'EMAIL_CHANGE' })
   await sendVerificationEmail(newEmail, code)
 }
 
@@ -584,7 +690,7 @@ export const verifyEmailChange = async (userId: number, newEmail: string, code: 
   if (existing && existing.id !== userId) throw new Error('이미 사용 중인 이메일입니다')
 
   // 인증코드 검증
-  const record = await EmailVerification.findOne({ where: { email: newEmail, is_used: false }, order: [['created_at', 'DESC']] })
+  const record = await EmailVerification.findOne({ where: { email: newEmail, is_used: false, purpose: 'EMAIL_CHANGE' }, order: [['created_at', 'DESC']] })
   if (!record) throw new Error('인증코드가 존재하지 않습니다')
   if (new Date() > record.expires_at) throw new Error('인증코드가 만료되었습니다')
   if (record.fail_count >= 5) {
@@ -597,8 +703,8 @@ export const verifyEmailChange = async (userId: number, newEmail: string, code: 
     throw new Error(`인증코드가 올바르지 않습니다. 남은 시도: ${remaining}회`)
   }
 
-  await record.update({ is_used: true })
+  await record.update({ is_used: true, verified_at: new Date() })
 
-  // 이메일 업데이트 + 변경일 기록
-  await User.update({ email: newEmail, email_changed_at: new Date() }, { where: { id: userId } })
+  // 이메일 업데이트 + 변경일 기록. 휴대폰으로 가입해 이메일이 미인증이던 사용자도 이 흐름(현재 이메일 그대로)으로 인증을 마친다.
+  await User.update({ email: newEmail, email_changed_at: new Date(), is_email_verified: true }, { where: { id: userId } })
 }

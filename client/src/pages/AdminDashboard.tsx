@@ -32,6 +32,8 @@ const TYPE_META: Record<string, { label: string; color: string }> = {
   CANARY_ACCESS:      { label: '카나리 계좌',     color: '#880e4f' },
   BOT_BEHAVIOR_MOUSE:  { label: '봇 행동-마우스(관측)', color: '#455a64' },
   BOT_BEHAVIOR_TYPING: { label: '봇 행동-타자(관측)',   color: '#37474f' },
+  MULTI_ACCOUNT_DEVICE: { label: '단말 다계정',        color: '#6a1b9a' },
+  LEDGER_TAMPERING:    { label: '체결 장부 위·변조',   color: '#bf360c' },
 }
 
 const ACTION_META: Record<string, { label: string; color: string }> = {
@@ -44,6 +46,8 @@ type Stats = {
   total: number; today: number; locked: number; blockedIPs: number
   honeypotHits: number; integrityViolations: number
   tradeAnomalies: number; tradeBlocked: number
+  multiAccountDevices: number; multiAccountAlerts: number; multiAccountBlocked: number
+  ledgerAnchored: number; ledgerTampering: number; ledgerOnChain: boolean
 }
 // 서버(getAnomalyLogs)는 AnomalyLog 행을 통째로 내려준다 — user_id·user_agent 도 온다.
 // 타입에만 빠져 있어 허니팟 표에서 `(h as any).user_agent` 로 우회하고 있었다.
@@ -223,6 +227,14 @@ export default function AdminDashboard() {
             {
               label: '거래 이상탐지', value: stats?.tradeAnomalies ?? '—', color: '#c62828', icon: '📈',
               note: stats ? `주문 거절 ${stats.tradeBlocked}건` : '',
+            },
+            {
+              label: '다계정 단말', value: stats?.multiAccountDevices ?? '—', color: '#6a1b9a', icon: '👥',
+              note: stats ? `전환·연결 경보 ${stats.multiAccountAlerts}건 · 가입 차단 ${stats.multiAccountBlocked}건` : '',
+            },
+            {
+              label: '체결 장부 고정(일)', value: stats?.ledgerAnchored ?? '—', color: '#bf360c', icon: '⛓️',
+              note: stats ? `위·변조 경보 ${stats.ledgerTampering}건 · ${stats.ledgerOnChain ? '체인 고정' : 'DB 고정(재배포 전)'}` : '',
             },
             { label: '잠긴 계정',    value: stats?.locked ?? '—', color: '#8e24aa', icon: '🔒', note: '' },
             { label: '차단된 IP',    value: stats?.blockedIPs ?? '—', color: '#fb8c00', icon: '🚫', note: '' },
